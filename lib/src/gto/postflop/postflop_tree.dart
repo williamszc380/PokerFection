@@ -64,7 +64,8 @@ class PostflopSpec {
 
   Street get street => switch (board.length) { 3 => Street.flop, 4 => Street.turn, _ => Street.river };
 
-  /// For sending to the web version's solver worker (lib/solver_worker.dart).
+  /// For sending to the web version's solver worker (lib/solver_worker.dart),
+  /// which rebuilds the spec from it: every field belongs here.
   Map<String, Object?> toJson() => {
         'board': board,
         'pot': pot,

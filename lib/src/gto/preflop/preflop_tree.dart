@@ -53,7 +53,8 @@ class PreflopSpec {
   String get key => '${stacks.join(',')}/$smallBlind/$bigBlind/$ante/${raiseRule.name}'
       '${hero < 0 ? '' : '/$hero/${raiseMultiples.join(',')}/${history.join(',')}'}';
 
-  /// For sending to the web version's solver worker (lib/solver_worker.dart).
+  /// For sending to the web version's solver worker (lib/solver_worker.dart),
+  /// which rebuilds the spec from it: every field belongs here.
   Map<String, Object?> toJson() => {
         'stacks': stacks,
         'smallBlind': smallBlind,
