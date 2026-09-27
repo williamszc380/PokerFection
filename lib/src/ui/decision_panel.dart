@@ -82,6 +82,9 @@ class DecisionPanelState extends State<DecisionPanel> {
   /// Play a choice drawn at random from the mix (Guess the GTO mode).
   bool _draw = false;
 
+  /// GTO's answer was filled in (Show GTO): the decision won't be scored.
+  bool _revealed = false;
+
   bool get _training => _c.heroSpot != null;
 
   void _reset(List<SpotAction> menu) {
@@ -94,6 +97,7 @@ class DecisionPanelState extends State<DecisionPanel> {
     // With percentages to set, the action played is drawn from them (RNG)
     // unless the user ticks one.
     _draw = _training;
+    _revealed = false;
   }
 
   /// How often the user plays each choice (adding up to 1).
@@ -125,7 +129,7 @@ class DecisionPanelState extends State<DecisionPanel> {
     final menu = _menu;
     if (menu == null || _c.heroScore != null) return;
     if (_training) {
-      _c.submitMix(_mix(), choice: _draw ? null : _played);
+      _c.submitMix(_mix(), choice: _draw ? null : _played, revealed: _revealed);
     } else {
       _c.heroAct(menu[_played].action);
     }
@@ -150,6 +154,16 @@ class DecisionPanelState extends State<DecisionPanel> {
     final raises = [for (final i in _rows.sizes) share(i)];
     // With no raise left, the split between the sizes stays as it was.
     if (_top[2] > 0 && raises.any((r) => r > 0)) _sizes = splitWhole(raises, 100);
+  });
+
+  /// Fills in GTO's answer as the mix (the user can still change it and
+  /// then plays as usual; the decision isn't scored).
+  void _reveal() => setState(() {
+    final gto = _c.heroSpot!.frequencies;
+    final raises = [for (final i in _rows.sizes) gto[i]];
+    _top = splitWhole([gto[_rows.fold], gto[_rows.passive], raises.fold(0.0, (a, b) => a + b)], 100);
+    if (raises.any((r) => r > 0)) _sizes = splitWhole(raises, 100);
+    _revealed = true;
   });
 
   void _tick(int index) => setState(() {
@@ -257,6 +271,14 @@ class DecisionPanelState extends State<DecisionPanel> {
               const SizedBox(width: 6),
               Text(s.randomize),
               const SizedBox(width: 12),
+              OutlinedButton.icon(
+                key: const ValueKey('show gto'),
+                onPressed: _revealed ? null : _reveal,
+                icon: const Icon(Icons.visibility, size: 18),
+                label: Text(s.showGto),
+                style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+              ),
+              const SizedBox(width: 8),
             ],
             Expanded(
               child: _PlayButton(
@@ -482,9 +504,13 @@ class DecisionPanelState extends State<DecisionPanel> {
       children: [
         Row(
           children: [
-            GradeChip(grade: score.grade),
-            const SizedBox(width: 10),
-            Text(s.score(score.score), style: theme.textTheme.titleMedium),
+            if (_c.heroRevealed)
+              Text(s.notScored, style: theme.textTheme.titleMedium?.copyWith(color: Colors.white60))
+            else ...[
+              GradeChip(grade: score.grade),
+              const SizedBox(width: 10),
+              Text(s.score(score.score), style: theme.textTheme.titleMedium),
+            ],
             const HelpButton(section: GlossarySection.scoring),
           ],
         ),

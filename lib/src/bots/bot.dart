@@ -190,7 +190,7 @@ class Bot {
   PlayerAction _betFraction(LegalActions legal, double fraction, int pot) =>
       PlayerAction.raiseTo(legal.currentBet + (pot * fraction).round());
 
-  /// Rounds and clamps an intended action so the engine always accepts it.
+  /// Clamps an intended action so the engine always accepts it.
   PlayerAction _makeLegal(PlayerAction action, LegalActions legal) {
     switch (action.type) {
       case ActionType.fold:
@@ -203,8 +203,7 @@ class Bot {
         if (!legal.canRaise) {
           return legal.canCall ? const PlayerAction.call() : const PlayerAction.check();
         }
-        var to = (action.amount / 10).round() * 10;
-        to = to.clamp(legal.minRaiseTo, legal.maxRaiseTo);
+        var to = action.amount.clamp(legal.minRaiseTo, legal.maxRaiseTo);
         // Don't leave a tiny stack behind: commit fully instead.
         if (to >= legal.maxRaiseTo * 0.7) to = legal.maxRaiseTo;
         return PlayerAction.raiseTo(to);

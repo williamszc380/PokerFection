@@ -5,7 +5,8 @@ import '../l10n/strings.dart';
 export '../l10n/strings.dart' show GlossarySection, GlossaryTerm;
 
 /// A small "?" next to a setting or heading: shows the glossary entries of
-/// [section] (only [terms], if given), with a link to the whole glossary.
+/// [section], or just [terms] (from any section), with a link to the whole
+/// glossary.
 class HelpButton extends StatefulWidget {
   const HelpButton({super.key, required this.section, this.terms});
 
@@ -41,11 +42,8 @@ class _HelpButtonState extends State<HelpButton> {
   /// Shows the section's entries (or just the chosen terms).
   void _open(BuildContext context) {
     final s = S.of(context);
-    final section = widget.section, terms = widget.terms;
-    final entries = [
-      for (final term in GlossaryTerm.values)
-        if (term.section == section && (terms == null || terms.contains(term))) term,
-    ];
+    final section = widget.section;
+    final entries = widget.terms ?? [for (final term in GlossaryTerm.values) if (term.section == section) term];
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(

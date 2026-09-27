@@ -171,6 +171,10 @@ class StringsEn extends S {
   @override
   String potOdds(int percent) => 'Pot Odds $percent%';
   @override
+  String get showGto => 'Show GTO';
+  @override
+  String get notScored => 'Not scored';
+  @override
   String get randomize => 'RNG';
   @override
   String get playRandomized => 'Play RNG';
@@ -426,7 +430,8 @@ class StringsEn extends S {
         GlossaryTerm.evLoss => 'How many BB your percentages give up compared with the best action.',
         GlossaryTerm.mixMatch => "How close your percentages are to GTO's: 100% means identical.",
         GlossaryTerm.score => '0 to 100: half for the match, half for losing little EV. What counts is how often '
-            'you fold, check or call, and raise; raise sizes count only 10%.',
+            'you fold, check or call, and raise; raise sizes count only 10%. Decisions where you use Show GTO '
+            "aren't scored.",
         GlossaryTerm.grades => 'By EV loss (raise sizes count 10%): Best (up to 0.02 BB), Good (0.08), Inaccuracy (0.25), '
             'Mistake (0.75), Blunder (more).',
         GlossaryTerm.noLimit => 'The betting used here: you can bet or raise any amount, up to all your chips.',

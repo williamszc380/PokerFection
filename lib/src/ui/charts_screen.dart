@@ -132,13 +132,13 @@ class _ChartsScreenState extends State<ChartsScreen> {
   Widget _choices(BuildContext context) {
     final s = S.of(context);
     final muted = Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.white60);
-    Widget line(String title, List<Widget> chips) => Padding(
+    Widget line(String title, List<Widget> chips, {Widget? help}) => Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: muted),
-              const SizedBox(height: 4),
+              Row(children: [Text(title, style: muted), ?help]),
+              if (help == null) const SizedBox(height: 4),
               Wrap(spacing: 6, runSpacing: 6, children: chips),
             ],
           ),
@@ -161,16 +161,28 @@ class _ChartsScreenState extends State<ChartsScreen> {
       children: [
         line(s.players, [for (var n = 2; n <= 8; n++) chip('$n', n, _players, (v) => _players = v)]),
         line(s.stack, [for (final bb in PreflopCharts.stacks) chip('$bb BB', bb, _stack, (v) => _stack = v)]),
-        line(s.position, [for (final p in seatOrder(_players)) chip(p.label, p, _hero, (v) => _hero = v)]),
-        line(s.spot, [
-          for (final spot in ChartSpot.values)
-            chip(s.chartSpot(spot), spot, _spot, (v) => _spot = v,
-                enabled: PreflopCharts.hasSpot(_players, _hero, spot)),
-        ]),
+        line(
+          s.position,
+          [
+            for (final p in allPositions)
+              chip(p.label, p, _hero, (v) => _hero = v, enabled: positionsForTable(_players).contains(p)),
+          ],
+          help: const HelpButton(section: GlossarySection.positions),
+        ),
+        line(
+          s.spot,
+          [
+            for (final spot in ChartSpot.values)
+              chip(s.chartSpot(spot), spot, _spot, (v) => _spot = v,
+                  enabled: PreflopCharts.hasSpot(_players, _hero, spot)),
+          ],
+          help: const HelpButton(section: GlossarySection.actions, terms: [GlossaryTerm.open, GlossaryTerm.threeBet]),
+        ),
         if (_spot != ChartSpot.open)
           line(s.chartVillain(_spot), [
-            for (final p in PreflopCharts.villains(_players, _hero, _spot))
-              chip<Position?>(p.label, p, _villain, (v) => _villain = v),
+            for (final p in allPositions)
+              chip<Position?>(p.label, p, _villain, (v) => _villain = v,
+                  enabled: PreflopCharts.villains(_players, _hero, _spot).contains(p)),
           ]),
       ],
     );
@@ -242,8 +254,9 @@ class _ChartsScreenState extends State<ChartsScreen> {
 }
 
 /// The 169 starting hands on a 13 × 13 grid (pairs on the diagonal, suited
-/// above it), each split into raise, call and fold by how often GTO does
-/// them, and filled as far up as how often the hand gets there.
+/// above it), each split side by side into raise, call and fold by how often
+/// GTO does them, over as much of its width as how often the hand gets
+/// there (the rest stays dark).
 class ChartGrid extends StatefulWidget {
   const ChartGrid({super.key, required this.chart, this.selected, this.onSelect});
 
@@ -319,9 +332,9 @@ class _ChartGridState extends State<ChartGrid> {
             children: [
               if (reach > 0)
                 Align(
-                  alignment: Alignment.bottomCenter,
+                  alignment: Alignment.centerLeft,
                   child: FractionallySizedBox(
-                    heightFactor: reach,
+                    widthFactor: reach,
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [

@@ -54,8 +54,9 @@ class PreflopCharts {
   static bool hasSpot(int players, Position hero, ChartSpot spot) =>
       villains(players, hero, spot).isNotEmpty || (spot == ChartSpot.open && hero != Position.bb);
 
-  /// Who can make the raise [hero] faces in [spot], in seat order: players
-  /// acting before them for an open, after them for a 3-bet. Empty for [ChartSpot.open].
+  /// Who can make the raise [hero] faces in [spot], in the order of
+  /// [allPositions]: players acting before them for an open, after them for
+  /// a 3-bet. Empty for [ChartSpot.open].
   static List<Position> villains(int players, Position hero, ChartSpot spot) {
     final order = positionsForTable(players);
     final at = order.indexOf(hero);
@@ -64,6 +65,6 @@ class PreflopCharts {
       ChartSpot.vsOpen => order.sublist(0, at),
       ChartSpot.vs3bet => hero == Position.bb ? const [] : order.sublist(at + 1),
     };
-    return [for (final p in seatOrder(players)) if (found.contains(p)) p];
+    return [for (final p in allPositions) if (found.contains(p)) p];
   }
 }

@@ -171,8 +171,10 @@ class _SetupScreenState extends State<SetupScreen> {
                 title: s.position,
                 help: const HelpButton(section: GlossarySection.positions),
                 child: _choices<Position?>(
-                  // Seat order, clockwise from the small blind: blinds first, button last.
-                  values: [null, ...seatOrder(_count)],
+                  // Seat order, clockwise from the small blind: blinds first, button last,
+                  // each in the same place at every table size.
+                  values: [null, ...allPositions],
+                  isEnabled: (p) => p == null || positionsForTable(_count).contains(p),
                   isSelected: (p) => p == _position,
                   label: (p) => p?.label ?? s.rotate,
                   onSelected: (p) => setState(() => _position = p),
@@ -409,11 +411,13 @@ class _SetupScreenState extends State<SetupScreen> {
     );
   }
 
+  /// Chips for [values]; the ones [isEnabled] says no to are greyed out.
   Widget _choices<T>({
     required List<T> values,
     required bool Function(T) isSelected,
     required String Function(T) label,
     required ValueChanged<T> onSelected,
+    bool Function(T)? isEnabled,
   }) {
     return Wrap(
       spacing: 8,
@@ -423,7 +427,7 @@ class _SetupScreenState extends State<SetupScreen> {
           ChoiceChip(
             label: Text(label(value)),
             selected: isSelected(value),
-            onSelected: (_) => onSelected(value),
+            onSelected: isEnabled == null || isEnabled(value) ? (_) => onSelected(value) : null,
           ),
       ],
     );

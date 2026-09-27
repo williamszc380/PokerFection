@@ -54,10 +54,16 @@ int buttonSeatFor(int playerCount, int seat, Position position) {
   return ((seat - offset) % playerCount + playerCount) % playerCount;
 }
 
-/// The positions of a table of [playerCount] players in seat order, as they
-/// sit around the table: the blinds first, the button last (heads-up: BTN, BB).
-List<Position> seatOrder(int playerCount) {
-  final preflop = positionsForTable(playerCount);
-  final n = preflop.length;
-  return n == 2 ? preflop : [...preflop.sublist(n - 2), ...preflop.sublist(0, n - 2)];
-}
+/// Every position in seat order at a full table: the blinds first, the
+/// button last. Lists of positions keep this order at every table size (the
+/// ones a smaller table doesn't have greyed out), so each one stays in place.
+const allPositions = [
+  Position.sb,
+  Position.bb,
+  Position.utg,
+  Position.utg1,
+  Position.lj,
+  Position.hj,
+  Position.co,
+  Position.btn,
+];

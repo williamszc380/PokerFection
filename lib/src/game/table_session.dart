@@ -195,9 +195,10 @@ class TableSession {
   }
 
   /// What [seat] is likely to hold right now, if everyone played GTO so far;
-  /// null when the hand has left the solved lines. For opponents, hands
-  /// using the user's cards are left out; the user's own range is shown as
-  /// the opponents see it (they don't know the user's cards).
+  /// null when the hand has left the solved lines. A raise counts the same
+  /// at any size (GTO's split between sizes is mostly noise). For opponents,
+  /// hands using the user's cards are left out; the user's own range is
+  /// shown as the opponents see it (they don't know the user's cards).
   RangeInfo? rangeOf(int seat) {
     final h = hand;
     if (h == null) return null;
@@ -205,7 +206,7 @@ class TableSession {
       for (final c in [...h.board, if (seat != heroSeat) ...h.holeCards(heroSeat)]) c.index,
     };
     if (h.street == Street.preflop) {
-      final weights = preflop?.rangeOf(h, seat);
+      final weights = preflop?.rangeOf(h, seat, anySize: true);
       return weights == null ? null : RangeInfo.fromClasses(weights, dead);
     }
     final weights = postflop?.currentRange(h, seat);
@@ -234,8 +235,10 @@ class TableSession {
   /// Every hand of the session, with the user's scored decisions (Guess the GTO mode).
   final List<HandRecord> history = [];
 
-  /// All scored decisions so far.
-  Iterable<DecisionScore> get scores => history.expand((h) => h.decisions).map((d) => d.score);
+  /// All scored decisions so far (not the ones where the user looked at
+  /// GTO's answer first).
+  Iterable<DecisionScore> get scores =>
+      history.expand((h) => h.decisions).where((d) => !d.revealed).map((d) => d.score);
 
   /// Solved games are needed to score the user or to run GTO bots.
   bool get needsSolver => config.guessGto || hasGtoBots;

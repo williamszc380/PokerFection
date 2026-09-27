@@ -163,9 +163,10 @@ class PreflopTracker {
 
   /// How likely [seat] is to hold each starting hand (169 weights, 0-1),
   /// given how everyone played so far, if they all followed the solved
-  /// strategies; null once the hand has left the solved lines.
-  Float64List? rangeOf(PokerHand hand, int seat) =>
-      _walk(hand)?.rangeOf(PreflopAdvisor.orderOf(hand, seat));
+  /// strategies; null once the hand has left the solved lines. With
+  /// [anySize], a raise counts as raising at any size (see [_Walk.rangeOf]).
+  Float64List? rangeOf(PokerHand hand, int seat, {bool anySize = false}) =>
+      _walk(hand)?.rangeOf(PreflopAdvisor.orderOf(hand, seat), anySize: anySize);
 }
 
 class _Step {
@@ -184,15 +185,33 @@ class _Walk {
   final PreflopNode node;
 
   /// Player [p]'s range: how often each starting hand takes every action
-  /// they took.
-  Float64List rangeOf(int p) {
+  /// they took. With [anySize], raising at any size (all-in included) counts
+  /// as the same action: the solver splits its raises between sizes of
+  /// nearly the same EV almost at random, so for showing a range the size
+  /// only adds noise.
+  Float64List rangeOf(int p, {bool anySize = false}) {
     final weights = Float64List(handClassCount)..fillRange(0, handClassCount, 1);
     for (final step in steps) {
       if (step.node.player != p) continue;
+      final actions = step.node.actions;
+      final alike = anySize
+          ? [for (var a = 0; a < actions.length; a++) if (_choice(actions[a].move) == _choice(actions[step.action].move)) a]
+          : [step.action];
       for (var h = 0; h < handClassCount; h++) {
-        weights[h] *= step.game.solution.frequency(step.node, step.action, h);
+        var frequency = 0.0;
+        for (final a in alike) {
+          frequency += step.game.solution.frequency(step.node, a, h);
+        }
+        weights[h] *= frequency;
       }
     }
     return weights;
   }
+
+  /// Fold, check or call, or raise (any size, all-in included).
+  static int _choice(PreflopMove move) => switch (move) {
+        PreflopMove.fold => 0,
+        PreflopMove.check || PreflopMove.call => 1,
+        PreflopMove.raise || PreflopMove.allIn => 2,
+      };
 }

@@ -258,8 +258,8 @@ class PreflopTree {
     return node;
   }
 
-  /// The raise to [multiple] times [currentBet], rounded to 5 chips.
-  static int raiseSize(int currentBet, double multiple) => (currentBet * multiple / 5).round() * 5;
+  /// The raise to [multiple] times [currentBet], to the chip (0.01 BB).
+  static int raiseSize(int currentBet, double multiple) => (currentBet * multiple).round();
 
   List<PreflopAction> _options(_State s, int p, {required bool fullMenu}) {
     final bb = spec.bigBlind;
@@ -294,7 +294,7 @@ class PreflopTree {
     void checkOrCall() => options.add(PreflopAction(toCall == 0 ? PreflopMove.check : PreflopMove.call));
 
     void raiseTo(double amount) {
-      final to = (amount / 5).round() * 5;
+      final to = amount.round();
       if (!canRaise || settings.pushFoldOnly) return;
       if (to < s.currentBet + s.fullRaise || to >= allInTo) return;
       if (s.contrib[p] - s.bet[p] + to > settings.maxCommit * effective) return;

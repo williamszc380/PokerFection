@@ -3,7 +3,7 @@ import '../engine/events.dart';
 import '../engine/positions.dart';
 import '../gto/spot_strategy.dart';
 
-/// One scored decision: what GTO does, what the user entered, and the score.
+/// One decision: what GTO does, what the user entered, and the score.
 class DecisionRecord {
   DecisionRecord({
     required this.street,
@@ -11,7 +11,12 @@ class DecisionRecord {
     required this.spot,
     required this.mix,
     required this.score,
+    this.revealed = false,
   });
+
+  /// The user looked at GTO's answer before playing (Show GTO): the
+  /// decision isn't scored, though its EV loss still counts.
+  final bool revealed;
 
   final Street street;
   final List<PlayingCard> board;
@@ -37,9 +42,12 @@ class HandRecord {
   /// Chips won (positive) or lost, once the hand is over.
   int? result;
 
-  double? get averageScore => decisions.isEmpty
-      ? null
-      : decisions.fold(0, (sum, d) => sum + d.score.score) / decisions.length;
+  /// The average score of the scored decisions (not the revealed ones);
+  /// null if there are none.
+  double? get averageScore {
+    final scored = [for (final d in decisions) if (!d.revealed) d.score.score];
+    return scored.isEmpty ? null : scored.fold(0, (sum, s) => sum + s) / scored.length;
+  }
 
   double get evLost => decisions.fold(0.0, (sum, d) => sum + d.score.evLoss);
 }

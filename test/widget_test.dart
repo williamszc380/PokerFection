@@ -124,6 +124,29 @@ void main() {
     expect(find.text('Avg'), findsOneWidget);
   });
 
+  testWidgets("Show GTO fills in GTO's answer, and that decision isn't scored", (tester) async {
+    setScreen(tester, const Size(1280, 900));
+    await tester.pumpWidget(MaterialApp(
+      home: TableScreen(
+        config: TableConfig.quick(playerCount: 2, stackBb: 20, guessGto: true),
+        speed: PlaybackSpeed.instant,
+        solutions: testSolutions(),
+      ),
+    ));
+    final show = find.byKey(const ValueKey('show gto'));
+    // Heads-up, the first decision is before the flop, always with a GTO answer.
+    for (var step = 0; step < 40 && show.evaluate().isEmpty; step++) {
+      await tester.pumpAndSettle();
+    }
+    await tester.tap(show);
+    await tester.pumpAndSettle();
+    expect(tester.widget<OutlinedButton>(show).onPressed, isNull, reason: 'shown once');
+    await tester.tap(find.byKey(const ValueKey('play')));
+    await tester.pumpAndSettle();
+    expect(find.text('Not scored'), findsOneWidget);
+    expect(find.textContaining('Score '), findsNothing);
+  });
+
   for (final size in const [Size(1280, 800), Size(400, 860)]) {
     testWidgets('plays several hands with instant animations at $size', (tester) async {
       setScreen(tester, size);

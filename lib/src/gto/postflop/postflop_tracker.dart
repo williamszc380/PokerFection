@@ -46,6 +46,10 @@ class PostflopTracker {
 
   /// Each player's weight on every combination (0-1325).
   List<Float64List>? _ranges;
+
+  /// The same for showing: with every raise counted as raising at any size,
+  /// which reads much more clearly (see [_narrowBy]).
+  List<Float64List>? _shown;
   Street? _street;
   PostflopSpec? _spec;
   Future<PostflopSolution>? _pending;
@@ -78,16 +82,20 @@ class PostflopTracker {
       }
       final first = hand.toAct!;
       _seats = [first, live.firstWhere((s) => s != first)];
-      final ranges = <Float64List>[];
+      final ranges = <Float64List>[], shown = <Float64List>[];
+      Float64List byCombo(Float64List classes) =>
+          Float64List.fromList([for (var c = 0; c < comboCount; c++) classes[comboClass[c]]]);
       for (final seat in _seats!) {
-        final classes = preflop.rangeOf(hand, seat);
-        if (classes == null) {
+        final classes = preflop.rangeOf(hand, seat), anySize = preflop.rangeOf(hand, seat, anySize: true);
+        if (classes == null || anySize == null) {
           unavailable = NoAnswer.leftSolvedLines;
           return;
         }
-        ranges.add(Float64List.fromList([for (var c = 0; c < comboCount; c++) classes[comboClass[c]]]));
+        ranges.add(byCombo(classes));
+        shown.add(byCombo(anySize));
       }
       _ranges = ranges;
+      _shown = shown;
     } else {
       // Narrow the ranges with what each player did on the street just played.
       await _pending;
@@ -117,7 +125,6 @@ class PostflopTracker {
   bool _narrow(PokerHand hand, Street street) {
     final solution = _solution;
     if (solution == null) return false;
-    final n = solution.hands.length;
     PostflopNode node = solution.tree.root;
     for (final e in hand.log) {
       if (e is! ActionTaken || e.street != street) continue;
@@ -125,15 +132,44 @@ class PostflopTracker {
       if (node is! PostflopDecision || node.player != p) return false;
       final i = matchAction(node, e);
       if (i < 0) return false;
-      final range = _ranges![p];
-      for (var c = 0; c < comboCount; c++) {
-        final compact = solution.hands.compact[c];
-        range[c] = compact < 0 ? 0 : range[c] * solution.strategy[node.offset + i * n + compact];
-      }
+      _narrowBy(_ranges![p], solution, node, i);
+      _narrowBy(_shown![p], solution, node, i, anySize: true);
       node = node.children[i];
     }
     return true;
   }
+
+  /// Keeps in [range] how often each combination takes action [i] at [node].
+  /// With [anySize], betting or raising at any size (all-in included) counts
+  /// as the same action: the solver splits its bets between sizes of nearly
+  /// the same EV almost at random, so for showing a range the size only
+  /// adds noise.
+  static void _narrowBy(Float64List range, PostflopSolution solution, PostflopDecision node, int i,
+      {bool anySize = false}) {
+    final n = solution.hands.length;
+    final alike = anySize
+        ? [for (var a = 0; a < node.actions.length; a++) if (_choice(node.actions[a].move) == _choice(node.actions[i].move)) a]
+        : [i];
+    for (var c = 0; c < comboCount; c++) {
+      final compact = solution.hands.compact[c];
+      if (compact < 0) {
+        range[c] = 0;
+        continue;
+      }
+      var frequency = 0.0;
+      for (final a in alike) {
+        frequency += solution.strategy[node.offset + a * n + compact];
+      }
+      range[c] *= frequency;
+    }
+  }
+
+  /// Fold, check or call, or bet or raise (any size, all-in included).
+  static int _choice(PostflopMove move) => switch (move) {
+        PostflopMove.fold => 0,
+        PostflopMove.check || PostflopMove.call => 1,
+        PostflopMove.bet || PostflopMove.raise || PostflopMove.allIn => 2,
+      };
 
   /// The tree action matching [e]. A size the tree doesn't have is mapped
   /// to the nearest one it has.
@@ -249,28 +285,23 @@ class PostflopTracker {
     return spot == null ? null : drawAction(spot, random);
   }
 
-  /// [seat]'s range right now: their range at the start of the street,
-  /// narrowed by what they did on it so far (once the street is solved).
+  /// [seat]'s range right now, for showing: their range at the start of the
+  /// street, narrowed by what they did on it so far (once the street is
+  /// solved), with every bet or raise counted as any size.
   Float64List? currentRange(PokerHand hand, int seat) {
-    final seats = _seats, ranges = _ranges;
-    if (unavailable != null || seats == null || ranges == null || !seats.contains(seat)) return null;
+    final seats = _seats, shown = _shown;
+    if (unavailable != null || seats == null || shown == null || !seats.contains(seat)) return null;
     final p = seats.indexOf(seat);
-    final range = Float64List.fromList(ranges[p]);
+    final range = Float64List.fromList(shown[p]);
     final solution = _solution;
     if (solution == null || hand.street != _street) return range;
-    final n = solution.hands.length;
     PostflopNode node = solution.tree.root;
     for (final e in hand.log) {
       if (e is! ActionTaken || e.street != hand.street) continue;
       if (node is! PostflopDecision) break;
       final i = matchAction(node, e);
       if (i < 0) break;
-      if (node.player == p) {
-        for (var c = 0; c < comboCount; c++) {
-          final compact = solution.hands.compact[c];
-          range[c] = compact < 0 ? 0 : range[c] * solution.strategy[node.offset + i * n + compact];
-        }
-      }
+      if (node.player == p) _narrowBy(range, solution, node, i, anySize: true);
       node = node.children[i];
     }
     return range;

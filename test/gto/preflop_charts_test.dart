@@ -61,10 +61,16 @@ void main() {
     // The big blind defends wider against the button than against UTG.
     expect(share(chart(6, Position.bb, ChartSpot.vsOpen, Position.btn), [0, 1]),
         greaterThan(share(chart(6, Position.bb, ChartSpot.vsOpen, Position.utg), [0, 1])));
+    // The button 3-bets a cutoff open about as often at 8 players as at 6 (the
+    // 8-player game once got stuck never 3-betting there).
+    for (final players in [6, 8]) {
+      expect(share(chart(players, Position.btn, ChartSpot.vsOpen, Position.co), [0]), inInclusiveRange(0.05, 0.2),
+          reason: '$players players');
+    }
     // Facing a 3-bet, only the hands that opened are in the range.
     final vs3bet = chart(6, Position.utg, ChartSpot.vs3bet, Position.btn);
     expect(vs3bet.reach(sevenDeuce), 0);
-    expect(vs3bet.reach(aces), 1);
+    expect(vs3bet.reach(aces), greaterThan(0.9), reason: 'aces nearly always open (sometimes all-in)');
     expect(vs3bet.mix(aces)[2], 0, reason: 'aces never fold');
   });
 }

@@ -25,7 +25,7 @@ class RangeScreen extends StatefulWidget {
 }
 
 class _RangeScreenState extends State<RangeScreen> {
-  bool _share = true;
+  bool _share = false;
   int? _seat;
 
   @override

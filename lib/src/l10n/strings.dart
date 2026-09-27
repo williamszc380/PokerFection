@@ -198,6 +198,10 @@ abstract class S {
 
   // The decision panel.
   String potOdds(int percent);
+
+  /// Fills in GTO's answer before playing; that decision isn't scored.
+  String get showGto;
+  String get notScored;
   String get randomize;
   String get playRandomized;
   String get continueHand;

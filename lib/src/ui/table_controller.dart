@@ -193,15 +193,19 @@ class TableController extends ChangeNotifier {
   int? heroPlay;
   bool heroDrew = false;
 
+  /// The user looked at GTO's answer before playing: not scored.
+  bool heroRevealed = false;
+
   /// Scores the user's mix (how often to take each action, adding up to 1)
   /// and fixes the action to play: [choice], or one drawn from the mix.
-  void submitMix(List<double> mix, {int? choice}) {
+  void submitMix(List<double> mix, {int? choice, bool revealed = false}) {
     final spot = heroSpot;
     final hand = session.hand;
     if (spot == null || hand == null || heroScore != null) return;
     heroMix = List.unmodifiable(mix);
     heroScore = scoreDecision(spot, mix);
     heroDrew = choice == null;
+    heroRevealed = revealed;
     heroPlay = choice ?? _draw(spot, mix);
     session.history.last.decisions.add(DecisionRecord(
       street: hand.street,
@@ -209,6 +213,7 @@ class TableController extends ChangeNotifier {
       spot: spot,
       mix: heroMix!,
       score: heroScore!,
+      revealed: revealed,
     )..played = heroPlay);
     _notify();
   }
@@ -316,6 +321,7 @@ class TableController extends ChangeNotifier {
     heroScore = null;
     heroPlay = null;
     heroDrew = false;
+    heroRevealed = false;
   }
 
   @override

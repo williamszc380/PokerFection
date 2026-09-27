@@ -171,6 +171,10 @@ class StringsEs extends S {
   @override
   String potOdds(int percent) => 'Pot odds $percent%';
   @override
+  String get showGto => 'Ver GTO';
+  @override
+  String get notScored => 'Sin puntuar';
+  @override
   String get randomize => 'RNG';
   @override
   String get playRandomized => 'Jugar RNG';
@@ -430,7 +434,8 @@ class StringsEs extends S {
         GlossaryTerm.evLoss => 'Cuántas BB pierden tus porcentajes frente a la mejor acción.',
         GlossaryTerm.mixMatch => 'Cuánto se parecen tus porcentajes a los de GTO: 100% es idéntico.',
         GlossaryTerm.score => 'De 0 a 100: la mitad por la coincidencia y la mitad por perder poco EV. Cuenta '
-            'cuánto te retiras, pasas o igualas, y subes; los tamaños de subida cuentan solo un 10%.',
+            'cuánto te retiras, pasas o igualas, y subes; los tamaños de subida cuentan solo un 10%. Las '
+            'decisiones en las que usas Ver GTO no puntúan.',
         GlossaryTerm.grades => 'Según la pérdida de EV (los tamaños de subida cuentan un 10%): Óptimo (hasta 0,02 BB), Bueno (0,08), Imprecisión (0,25), '
             'Error (0,75), Error grave (más).',
         GlossaryTerm.noLimit => 'Las apuestas que se usan aquí: puedes apostar o subir cualquier cantidad, hasta '

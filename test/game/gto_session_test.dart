@@ -52,6 +52,17 @@ void main() {
           }
           expect(total, closeTo(1, 1e-9));
         }
+        // The user's range as shown counts a raise at any size, so it holds
+        // at least the hands GTO raises this exact size with.
+        if (hand.street == Street.preflop) {
+          final exact = session.preflop!.rangeOf(hand, TableSession.heroSeat);
+          final shown = session.rangeOf(TableSession.heroSeat);
+          if (exact != null && shown != null) {
+            for (var h = 0; h < 169; h++) {
+              expect(shown.frequency[h], greaterThanOrEqualTo(exact[h] - 1e-9));
+            }
+          }
+        }
         if (session.isHeroTurn) {
           final spot = session.heroSpot();
           expect(spot, isNotNull, reason: 'hand $i, ${hand.street}');

@@ -233,6 +233,7 @@ class PreflopSolver implements BranchSolver {
   void beginIteration(int t) {
     _positiveDiscount = pow(t, 1.5) / (pow(t, 1.5) + 1);
     _strategyKeep = pow(t / (t + 1), 2).toDouble();
+    _floorNow = t % _floorEvery == 0 ? _floor * _floorEvery : 0;
   }
 
   /// Computes the average strategies; later walks use them and record values.
@@ -256,6 +257,7 @@ class PreflopSolver implements BranchSolver {
     }
     _values.fillRange(0, _values.length, double.nan);
     _finalPass = true;
+    _floorNow = 0;
   }
 
   /// Average strategies and values of the owned decisions (see [offsets]).
@@ -387,7 +389,10 @@ class PreflopSolver implements BranchSolver {
       final base = sBase + i * _h;
       var reachSum = 0.0;
       for (var h = 0; h < _h; h++) {
-        final r = reach[myReach + h] * (trembling ? strategy[base + h] + tremble[i * _h + h] : strategy[base + h]);
+        final r = reach[myReach + h] *
+            (trembling
+                ? strategy[base + h] + tremble[i * _h + h]
+                : strategy[base + h] + _floorNow);
         reach[childReach + h] = r;
         reachSum += r;
       }
@@ -439,6 +444,17 @@ class PreflopSolver implements BranchSolver {
       _update(node, myReach, sBase, outBase + p * _h);
     }
   }
+
+  /// While training, every action everywhere else also gets this tiny
+  /// weight, so the answers to a line nobody takes still get trained.
+  /// Otherwise they can stay untrained (say, the blinds jamming 80% against
+  /// a 3-bet nobody makes), which in turn keeps anyone from making it.
+  static const _floor = 1e-3;
+
+  /// The floor is only added every few iterations (and weighs that much
+  /// more then): walking every line nobody takes is slow.
+  static const _floorEvery = 8;
+  double _floorNow = 0;
 
   /// Share of the user's hands that "tremble" into each action they don't
   /// otherwise take, and how much weight they get.
