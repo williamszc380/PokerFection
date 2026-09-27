@@ -1,8 +1,9 @@
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:typed_data';
 
-import '../message_queue.dart';
+import '../branch_jobs.dart';
+import '../branch_threads.dart';
+import '../branches.dart';
 import 'postflop_solver.dart';
 import 'postflop_tree.dart';
 
@@ -75,7 +76,7 @@ Future<PostflopSolution> solvePostflopInParallel(
   // Start every worker at once (each builds its own copy of the tree).
   final workers = await Future.wait([
     for (final slots in plan.assignments)
-      _Worker.start(spec, ranges, [for (final s in slots) plan.frontier[s]], slots),
+      _Worker.start(PostflopBranchJob(spec, ranges, [for (final s in slots) plan.frontier[s]]), slots),
   ]);
   final n = coordinator.hands.length;
 
@@ -120,28 +121,12 @@ Future<PostflopSolution> solvePostflopInParallel(
 }
 
 class _Worker {
-  _Worker._(this._isolate, this._send, this._replies, this._slots);
+  _Worker._(this._thread, this._slots);
 
-  static Future<_Worker> start(
-    PostflopSpec spec,
-    List<Float64List> ranges,
-    List<int> roots,
-    List<int> slots,
-  ) async {
-    final replies = ReceivePort();
-    final isolate = await Isolate.spawn(
-      _workerMain,
-      (replies.sendPort, spec, ranges, roots),
-      onError: replies.sendPort,
-    );
-    final queue = MessageQueue(replies);
-    final send = await queue.next as SendPort;
-    return _Worker._(isolate, send, queue, slots);
-  }
+  static Future<_Worker> start(PostflopBranchJob job, List<int> slots) async =>
+      _Worker._(await startBranchWorker(job), slots);
 
-  final Isolate _isolate;
-  final SendPort _send;
-  final MessageQueue _replies;
+  final BranchWorker _thread;
   final List<int> _slots;
 
   Future<void> run(PostflopSolver coordinator, int t, {required bool last, required int hands}) async {
@@ -156,64 +141,13 @@ class _Worker {
       reach.setRange(k * block, (k + 1) * block, coordinator.frontierReach, slot * block);
       mass.setRange(k * 2, (k + 1) * 2, coordinator.frontierMass, slot * 2);
     }
-    _send.send((t, last, active, reach, mass));
-    final values = await _replies.next as Float64List;
+    final values = await _thread.walk(t, last, active, reach, mass);
     for (var k = 0; k < _slots.length; k++) {
       coordinator.frontierValues.setRange(_slots[k] * block, (_slots[k] + 1) * block, values, k * block);
     }
   }
 
-  Future<(Int32List, Float64List, Float64List)> export() async {
-    _send.send('export');
-    return await _replies.next as (Int32List, Float64List, Float64List);
-  }
+  Future<BranchExport> export() => _thread.export();
 
-  void stop() {
-    _send.send('stop');
-    _isolate.kill(priority: Isolate.beforeNextEvent);
-    _replies.cancel();
-  }
-}
-
-void _workerMain((SendPort, PostflopSpec, List<Float64List>, List<int>) setup) {
-  final (reply, spec, ranges, roots) = setup;
-  final tree = PostflopTree(spec, hands: 1);
-  final owned = <int>[];
-  void collect(PostflopNode node) {
-    if (node is PostflopDecision) {
-      owned.add(node.id);
-      node.children.forEach(collect);
-    }
-  }
-
-  for (final id in roots) {
-    collect(tree.decisions[id]);
-  }
-  final solver = PostflopSolver.part(spec, ranges, owned: owned);
-  final block = 2 * solver.hands.length;
-  var finalPass = false;
-
-  final inbox = ReceivePort();
-  reply.send(inbox.sendPort);
-  inbox.listen((message) {
-    if (message == 'stop') {
-      inbox.close();
-    } else if (message == 'export') {
-      reply.send((solver.offsets, solver.ownedAverage, solver.ownedValues));
-    } else {
-      final (t, last, active, reach, mass) = message as (int, bool, Uint8List, Float64List, Float64List);
-      if (last && !finalPass) {
-        solver.beginFinalPass();
-        finalPass = true;
-      } else if (!last) {
-        solver.beginIteration(t);
-      }
-      final values = Float64List(roots.length * block);
-      for (var k = 0; k < roots.length; k++) {
-        if (active[k] == 0) continue;
-        solver.walkBranch(roots[k], reach, k * block, mass, k * 2, values, k * block);
-      }
-      reply.send(values);
-    }
-  });
+  void stop() => _thread.stop();
 }

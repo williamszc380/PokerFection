@@ -1,9 +1,10 @@
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:typed_data';
 
+import '../branch_jobs.dart';
+import '../branch_threads.dart';
+import '../branches.dart';
 import '../hand_classes.dart';
-import '../message_queue.dart';
 import 'preflop_equity.dart';
 import 'preflop_solver.dart';
 import 'preflop_tree.dart';
@@ -84,7 +85,7 @@ Future<PreflopSolution> solvePreflopInParallel(
   // Start every worker at once (each builds its own copy of the tree).
   final workers = await Future.wait([
     for (final slots in plan.assignments)
-      _Worker.start(spec, equity, [for (final s in slots) plan.frontier[s]], slots),
+      _Worker.start(PreflopBranchJob(spec, equity.values, [for (final s in slots) plan.frontier[s]]), slots),
   ]);
   final n = spec.players;
 
@@ -131,27 +132,14 @@ Future<PreflopSolution> solvePreflopInParallel(
   }
 }
 
-/// One worker thread, solving the branches that start at [roots].
+/// One worker thread, solving the branches of [PreflopBranchJob.roots].
 class _Worker {
-  _Worker._(this._isolate, this._send, this._replies, this._slots);
+  _Worker._(this._thread, this._slots);
 
-  static Future<_Worker> start(PreflopSpec spec, PreflopEquity equity, List<int> roots, List<int> slots) async {
-    final replies = ReceivePort();
-    // Errors arrive on the same port, so a failing worker makes the solve fail
-    // instead of waiting forever.
-    final isolate = await Isolate.spawn(
-      _workerMain,
-      (replies.sendPort, spec, equity.values, roots),
-      onError: replies.sendPort,
-    );
-    final queue = MessageQueue(replies);
-    final send = await queue.next as SendPort;
-    return _Worker._(isolate, send, queue, slots);
-  }
+  static Future<_Worker> start(PreflopBranchJob job, List<int> slots) async =>
+      _Worker._(await startBranchWorker(job), slots);
 
-  final Isolate _isolate;
-  final SendPort _send;
-  final MessageQueue _replies;
+  final BranchWorker _thread;
 
   /// The coordinator's frontier slots this worker handles, in order.
   final List<int> _slots;
@@ -169,68 +157,14 @@ class _Worker {
       reach.setRange(k * block, (k + 1) * block, coordinator.frontierReach, slot * block);
       mass.setRange(k * players, (k + 1) * players, coordinator.frontierMass, slot * players);
     }
-    _send.send((t, last, active, reach, mass));
-    final values = await _replies.next as Float64List;
+    final values = await _thread.walk(t, last, active, reach, mass);
     for (var k = 0; k < _slots.length; k++) {
       coordinator.frontierValues.setRange(_slots[k] * block, (_slots[k] + 1) * block, values, k * block);
     }
   }
 
-  Future<(Int32List, Float64List, Float64List)> export() async {
-    _send.send('export');
-    return await _replies.next as (Int32List, Float64List, Float64List);
-  }
+  Future<BranchExport> export() => _thread.export();
 
-  void stop() {
-    _send.send('stop');
-    _isolate.kill(priority: Isolate.beforeNextEvent);
-    _replies.cancel();
-  }
-}
-
-typedef _Setup = (SendPort, PreflopSpec, Float64List, List<int>);
-
-void _workerMain(_Setup setup) {
-  final (reply, spec, equityValues, roots) = setup;
-  final tree = PreflopTree(spec);
-  final owned = <int>[];
-  void collect(PreflopNode node) {
-    if (node is PreflopDecision) {
-      owned.add(node.id);
-      node.children.forEach(collect);
-    }
-  }
-
-  for (final id in roots) {
-    collect(tree.decisions[id]);
-  }
-  final solver = PreflopSolver.part(tree, PreflopEquity(equityValues), owned: owned);
-  final n = spec.players;
-  final block = n * _h;
-  var finalPass = false;
-
-  final inbox = ReceivePort();
-  reply.send(inbox.sendPort);
-  inbox.listen((message) {
-    if (message == 'stop') {
-      inbox.close();
-    } else if (message == 'export') {
-      reply.send((solver.offsets, solver.ownedAverage, solver.ownedValues));
-    } else {
-      final (t, last, active, reach, mass) = message as (int, bool, Uint8List, Float64List, Float64List);
-      if (last && !finalPass) {
-        solver.beginFinalPass();
-        finalPass = true;
-      } else if (!last) {
-        solver.beginIteration(t);
-      }
-      final values = Float64List(roots.length * block);
-      for (var k = 0; k < roots.length; k++) {
-        if (active[k] == 0) continue;
-        solver.walkBranch(roots[k], reach, k * block, mass, k * n, values, k * block);
-      }
-      reply.send(values);
-    }
-  });
+  void stop() => _thread.stop();
 }
 

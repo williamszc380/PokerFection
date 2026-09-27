@@ -53,6 +53,35 @@ class PreflopSpec {
   String get key => '${stacks.join(',')}/$smallBlind/$bigBlind/$ante/${raiseRule.name}'
       '${hero < 0 ? '' : '/$hero/${raiseMultiples.join(',')}/${history.join(',')}'}';
 
+  /// For sending to the web version's solver worker (lib/solver_worker.dart).
+  Map<String, Object?> toJson() => {
+        'stacks': stacks,
+        'smallBlind': smallBlind,
+        'bigBlind': bigBlind,
+        'ante': ante,
+        'raiseRule': raiseRule.name,
+        'raiseMultiples': raiseMultiples,
+        'history': [for (final a in history) [a.move.name, a.raiseTo]],
+        'hero': hero,
+      };
+
+  factory PreflopSpec.fromJson(Map<String, Object?> json) {
+    int integer(String key) => (json[key] as num).toInt();
+    return PreflopSpec(
+      stacks: [for (final s in json['stacks'] as List) (s as num).toInt()],
+      smallBlind: integer('smallBlind'),
+      bigBlind: integer('bigBlind'),
+      ante: integer('ante'),
+      raiseRule: RaiseRule.values.byName(json['raiseRule'] as String),
+      raiseMultiples: [for (final m in json['raiseMultiples'] as List) (m as num).toDouble()],
+      history: [
+        for (final a in json['history'] as List)
+          PreflopAction(PreflopMove.values.byName((a as List)[0] as String), (a[1] as num).toInt()),
+      ],
+      hero: integer('hero'),
+    );
+  }
+
   @override
   bool operator ==(Object other) => other is PreflopSpec && other.key == key;
 

@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../branches.dart';
 import '../combos.dart';
 import 'postflop_tree.dart';
 import 'showdown.dart';
@@ -71,7 +72,7 @@ class PostflopSolution {
 /// each hand gets its equity share of the pot over the cards still to come
 /// (all rivers on the turn; a sample of turn/river pairs on the flop).
 /// The next street is solved again when it is reached.
-class PostflopSolver {
+class PostflopSolver implements BranchSolver {
   /// [ranges]: each player's weight on every combination (0-1325), in the
   /// order of [PostflopSpec.stacks] (first to act first).
   factory PostflopSolver(PostflopSpec spec, List<Float64List> ranges, {int flopRunouts = 40}) =>
@@ -165,6 +166,7 @@ class PostflopSolver {
   final int _width;
 
   /// Where each decision's numbers start in this solver's arrays (-1 if not owned).
+  @override
   final Int32List offsets;
   final Int32List _slots;
 
@@ -266,6 +268,7 @@ class PostflopSolver {
   }
 
   /// Sets the discounting for iteration [t] (counting from 1).
+  @override
   void beginIteration(int t) {
     _iteration = t;
     _positiveDiscount = pow(t, 1.5) / (pow(t, 1.5) + 1);
@@ -273,6 +276,7 @@ class PostflopSolver {
   }
 
   /// Computes the average strategies; later walks use them and record values.
+  @override
   void beginFinalPass() {
     final n = _n;
     for (final node in tree.decisions) {
@@ -295,7 +299,9 @@ class PostflopSolver {
   }
 
   /// Average strategies and values of the owned decisions (see [offsets]).
+  @override
   Float64List get ownedAverage => _average;
+  @override
   Float64List get ownedValues => _values;
 
   /// Coordinator, step 1: records each frontier decision's reach.
@@ -311,6 +317,7 @@ class PostflopSolver {
 
   /// Worker: walks the branch starting at decision [nodeId], given both
   /// players' reach and mass there, and writes both players' values into [out].
+  @override
   void walkBranch(
     int nodeId,
     Float64List reach,

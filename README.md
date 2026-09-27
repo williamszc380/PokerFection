@@ -1,17 +1,17 @@
-# pokerfection
+# PokerFection
 
-Practice poker decisions against bots.
+Practice No-Limit Hold'em decisions against bots. In GTO Training, every
+decision is scored against a game-theory-optimal answer, solved on your own
+device; the Preflop Charts show GTO ranges for 2 to 8 players.
 
-## Getting Started
+**Play in your browser:** https://williamszc380.github.io/PokerFection/
 
-This project is a starting point for a Flutter application.
+## Running and building
 
-A few resources to get you started if this is your first Flutter project:
+- Windows: `flutter run -d windows`
+- Web: `dart run tool/build_web.dart` builds the site into `build/web`.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+The web build is the app plus the solvers' Web Worker
+(`lib/solver_worker.dart`), which `flutter build web` leaves out: without it
+the site still works, but solving freezes the page. Every push to `main`
+publishes the site (`.github/workflows/website.yml`).

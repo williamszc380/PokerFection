@@ -19,6 +19,7 @@
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="Practice poker decisions against bots.">
+  <meta name="theme-color" content="#0B0F12">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -31,16 +32,25 @@
 
   <title>PokerFection</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    /* The page's color is on html alone: a body background would hide #loading. */
+    html { background: #0B0F12; }
+    body { margin: 0; height: 100%; }
+    /* Shown while the app loads; behind the app once it draws. */
+    #loading { position: fixed; inset: 0; z-index: -1; display: flex; align-items: center; justify-content: center; }
+    #loading div {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: 4px solid rgba(255, 193, 7, 0.2); border-top-color: #FFC107;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
-
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
+  <div id="loading"><div></div></div>
+  <script>
+    window.addEventListener('flutter-first-frame', () => document.getElementById('loading')?.remove());
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

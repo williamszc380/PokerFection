@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../branches.dart';
 import '../hand_classes.dart';
 import 'preflop_equity.dart';
 import 'preflop_tree.dart';
@@ -42,7 +43,7 @@ class PreflopSolution {
 ///
 /// For speed, every buffer is one flat array indexed by offsets (compiled
 /// Dart is much slower with lists of arrays in hot loops).
-class PreflopSolver {
+class PreflopSolver implements BranchSolver {
   /// Solves the whole tree on this thread. [ranges] gives every player's
   /// weight (0-1) on each starting hand when the tree starts, player after
   /// player (players x 169); null means every hand is possible.
@@ -143,6 +144,7 @@ class PreflopSolver {
   final int _width;
 
   /// Where each decision's numbers start in this solver's arrays (-1 if not owned).
+  @override
   final Int32List offsets;
   final Int32List _slots;
   final Float64List _regrets;
@@ -227,12 +229,14 @@ class PreflopSolver {
   }
 
   /// Sets the discounting for iteration [t] (counting from 1).
+  @override
   void beginIteration(int t) {
     _positiveDiscount = pow(t, 1.5) / (pow(t, 1.5) + 1);
     _strategyKeep = pow(t / (t + 1), 2).toDouble();
   }
 
   /// Computes the average strategies; later walks use them and record values.
+  @override
   void beginFinalPass() {
     final sums = _strategySum, average = _average;
     for (final node in tree.decisions) {
@@ -255,7 +259,9 @@ class PreflopSolver {
   }
 
   /// Average strategies and values of the owned decisions (see [offsets]).
+  @override
   Float64List get ownedAverage => _average;
+  @override
   Float64List get ownedValues => _values;
 
   /// Coordinator, step 1: walks the top of the tree and records, for each
@@ -274,6 +280,7 @@ class PreflopSolver {
   /// Worker: walks the branch starting at decision [nodeId], given every
   /// player's reach vector and mass there, and writes every player's values
   /// (n x 169) into [out] at [outAt].
+  @override
   void walkBranch(
     int nodeId,
     Float64List reach,
@@ -465,7 +472,11 @@ class PreflopSolver {
         }
         gap[h] = values[i * _h + h] - best;
       }
-      order.sort((a, b) => gap[b].compareTo(gap[a]));
+      // Ties in hand order, so every platform's sort picks the same hands.
+      order.sort((a, b) {
+        final byGap = gap[b].compareTo(gap[a]);
+        return byGap != 0 ? byGap : a - b;
+      });
       var taken = 0.0;
       for (final h in order) {
         if (taken >= _trembleShare * total) break;

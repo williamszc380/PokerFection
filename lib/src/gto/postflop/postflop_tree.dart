@@ -63,6 +63,35 @@ class PostflopSpec {
   final List<double> botRaiseSizes;
 
   Street get street => switch (board.length) { 3 => Street.flop, 4 => Street.turn, _ => Street.river };
+
+  /// For sending to the web version's solver worker (lib/solver_worker.dart).
+  Map<String, Object?> toJson() => {
+        'board': board,
+        'pot': pot,
+        'stacks': stacks,
+        'bigBlind': bigBlind,
+        'raiseRule': raiseRule.name,
+        'hero': hero,
+        'heroSizes': heroSizes,
+        'botBetSizes': botBetSizes,
+        'botRaiseSizes': botRaiseSizes,
+      };
+
+  factory PostflopSpec.fromJson(Map<String, Object?> json) {
+    List<int> ints(String key) => [for (final v in json[key] as List) (v as num).toInt()];
+    List<double> doubles(String key) => [for (final v in json[key] as List) (v as num).toDouble()];
+    return PostflopSpec(
+      board: ints('board'),
+      pot: (json['pot'] as num).toInt(),
+      stacks: ints('stacks'),
+      bigBlind: (json['bigBlind'] as num).toInt(),
+      raiseRule: RaiseRule.values.byName(json['raiseRule'] as String),
+      hero: (json['hero'] as num).toInt(),
+      heroSizes: doubles('heroSizes'),
+      botBetSizes: doubles('botBetSizes'),
+      botRaiseSizes: doubles('botRaiseSizes'),
+    );
+  }
 }
 
 enum PostflopMove { fold, check, call, bet, raise, allIn }
