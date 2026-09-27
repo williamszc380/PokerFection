@@ -30,7 +30,6 @@ class SeatWidget extends StatelessWidget {
     required this.isActing,
     required this.isHero,
     this.showStyle = false,
-    this.onMore,
     this.hovered = false,
   });
 
@@ -41,9 +40,6 @@ class SeatWidget extends StatelessWidget {
 
   /// Show the bot's playing style under its stack.
   final bool showStyle;
-
-  /// Opens this player's options (a small ⋮ button on the info box).
-  final VoidCallback? onMore;
 
   /// The mouse is over the seat (which can be clicked): light it up.
   final bool hovered;
@@ -70,22 +66,25 @@ class SeatWidget extends StatelessWidget {
         clipBehavior: Clip.none,
         alignment: Alignment.topCenter,
         children: [
-          // Cards, peeking out above the info box.
+          // Cards, peeking out above the info box (grey and faded once folded).
           Positioned(
             top: g.seatCardsAbove - cardWidth * cardAspectRatio * 0.72,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (var i = 0; i < seat.cardsHeld; i++)
-                  Padding(
-                    padding: EdgeInsets.only(left: i == 0 ? 0 : 3 * g.scale),
-                    child: CardView(
-                      width: cardWidth,
-                      card: i < seat.cards.length ? seat.cards[i] : null,
-                      faceUp: seat.faceUp,
+            child: _Folded(
+              folded: seat.folded,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < seat.cardsHeld; i++)
+                    Padding(
+                      padding: EdgeInsets.only(left: i == 0 ? 0 : 3 * g.scale),
+                      child: CardView(
+                        width: cardWidth,
+                        card: i < seat.cards.length ? seat.cards[i] : null,
+                        faceUp: seat.faceUp,
+                      ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
           Positioned(
@@ -100,23 +99,6 @@ class SeatWidget extends StatelessWidget {
             Positioned(
               top: g.seatCardsAbove + box.height - g.pillHeight / 2,
               child: label,
-            ),
-          if (onMore != null)
-            Positioned(
-              top: g.seatCardsAbove - 9 * g.scale,
-              right: 0,
-              child: Material(
-                color: const Color(0xFF2A3136),
-                shape: const CircleBorder(side: BorderSide(color: Colors.white24)),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: onMore,
-                  child: Padding(
-                    padding: EdgeInsets.all(2 * g.scale),
-                    child: Icon(Icons.more_vert, size: 16 * g.scale),
-                  ),
-                ),
-              ),
             ),
         ],
       ),
@@ -256,5 +238,26 @@ class SeatWidget extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Folded cards: grey and faded, so a fold reads at a glance.
+class _Folded extends StatelessWidget {
+  const _Folded({required this.folded, required this.child});
+
+  final bool folded;
+  final Widget child;
+
+  static const _grey = ColorFilter.matrix([
+    0.2126, 0.7152, 0.0722, 0, 0, //
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
+
+  @override
+  Widget build(BuildContext context) {
+    if (!folded) return child;
+    return Opacity(opacity: 0.55, child: ColorFiltered(colorFilter: _grey, child: child));
   }
 }

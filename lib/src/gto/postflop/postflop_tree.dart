@@ -28,7 +28,7 @@ class PostflopSpec {
   }
 
   /// The user's sizes, for bets and raises alike, at every decision.
-  static const defaultHeroSizes = [0.33, 0.5, 0.75, 1.0, 1.5];
+  static const defaultHeroSizes = [0.25, 0.33, 0.5, 0.75, 1.0, 1.5];
 
   /// Bots use fewer sizes, and raise only against the first bet (after
   /// that they can still go all-in): every size adds to the work.

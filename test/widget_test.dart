@@ -11,6 +11,7 @@ import 'package:pokerfection/src/gto/gto_solutions.dart';
 import 'package:pokerfection/src/ui/table_controller.dart';
 import 'package:pokerfection/src/ui/charts_screen.dart';
 import 'package:pokerfection/src/ui/table_screen.dart';
+import 'package:pokerfection/src/ui/widgets/card_view.dart';
 import 'package:pokerfection/src/ui/widgets/logo.dart';
 
 /// Makes the user's decision if it's their turn: check or call by default
@@ -124,7 +125,45 @@ void main() {
     expect(find.text('Avg'), findsOneWidget);
   });
 
-  testWidgets("Show GTO fills in GTO's answer, and that decision isn't scored", (tester) async {
+  testWidgets("with the cards shown, a player who folds keeps theirs, dimmed", (tester) async {
+    setScreen(tester, const Size(1280, 900));
+    await tester.pumpWidget(MaterialApp(
+      home: TableScreen(
+        config: TableConfig.quick(playerCount: 6, stackBb: 20, guessGto: true),
+        speed: PlaybackSpeed.instant,
+        solutions: testSolutions(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Show Cards'));
+    int foldedWithCards() {
+      var count = 0;
+      for (var seat = 1; seat < 6; seat++) {
+        final box = find.byKey(ValueKey('seat$seat'));
+        final folded = find.descendant(of: box, matching: find.text('Fold')).evaluate().isNotEmpty;
+        if (folded && find.descendant(of: box, matching: find.byType(CardView)).evaluate().length == 2) count++;
+      }
+      return count;
+    }
+
+    var seen = 0;
+    for (var step = 0; step < 40 && seen == 0; step++) {
+      await tester.pumpAndSettle();
+      seen = foldedWithCards();
+      if (seen > 0) break;
+      final cont = find.byKey(const ValueKey('continue'));
+      if (cont.evaluate().isNotEmpty) {
+        await tester.tap(cont);
+      } else if (!await actIfAsked(tester, call: true) && find.text('Next Hand').evaluate().isNotEmpty) {
+        await tester.tap(find.text('Next Hand'));
+      }
+    }
+    expect(seen, greaterThan(0));
+  });
+
+  testWidgets("Show GTO fills in GTO's answer, which scores top marks", (tester) async {
     setScreen(tester, const Size(1280, 900));
     await tester.pumpWidget(MaterialApp(
       home: TableScreen(
@@ -152,8 +191,10 @@ void main() {
     expect(tester.widget<OutlinedButton>(show).onPressed, isNull);
     await tester.tap(find.byKey(const ValueKey('play')));
     await tester.pumpAndSettle();
-    expect(find.text('Not scored'), findsOneWidget);
-    expect(find.textContaining('Score '), findsNothing);
+    // Scored like any decision: GTO's own mix gets (about) 100.
+    final score = find.textContaining('Score ');
+    expect(score, findsOneWidget);
+    expect((tester.widget<Text>(score).data!), matches(RegExp(r'Score (9\d|100)$')));
   });
 
   for (final size in const [Size(1280, 800), Size(400, 860)]) {

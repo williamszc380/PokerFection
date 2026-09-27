@@ -83,9 +83,6 @@ class DecisionPanelState extends State<DecisionPanel> {
   /// Play a choice drawn at random from the mix (Guess the GTO mode).
   bool _draw = false;
 
-  /// GTO's answer was filled in (Show GTO): the decision won't be scored.
-  bool _revealed = false;
-
   /// GTO's answer as last filled in; Show GTO can be pressed again once the
   /// percentages differ from it.
   List<int>? _gtoTop;
@@ -106,7 +103,6 @@ class DecisionPanelState extends State<DecisionPanel> {
     // With percentages to set, the action played is drawn from them (RNG)
     // unless the user ticks one.
     _draw = _training;
-    _revealed = false;
     _gtoTop = null;
     _gtoSizes = null;
   }
@@ -140,7 +136,7 @@ class DecisionPanelState extends State<DecisionPanel> {
     final menu = _menu;
     if (menu == null || _c.heroScore != null) return;
     if (_training) {
-      _c.submitMix(_mix(), choice: _draw ? null : _played, revealed: _revealed);
+      _c.submitMix(_mix(), choice: _draw ? null : _played);
     } else {
       _c.heroAct(menu[_played].action);
     }
@@ -174,7 +170,6 @@ class DecisionPanelState extends State<DecisionPanel> {
     final raises = [for (final i in _rows.sizes) gto[i]];
     _top = splitWhole([gto[_rows.fold], gto[_rows.passive], raises.fold(0.0, (a, b) => a + b)], 100);
     if (raises.any((r) => r > 0)) _sizes = splitWhole(raises, 100);
-    _revealed = true;
     _gtoTop = List.of(_top);
     _gtoSizes = List.of(_sizes);
   });
@@ -491,13 +486,9 @@ class DecisionPanelState extends State<DecisionPanel> {
       children: [
         Row(
           children: [
-            if (_c.heroRevealed)
-              Text(s.notScored, style: theme.textTheme.titleMedium?.copyWith(color: Colors.white60))
-            else ...[
-              GradeChip(grade: score.grade),
-              const SizedBox(width: 10),
-              Text(s.score(score.score), style: theme.textTheme.titleMedium),
-            ],
+            GradeChip(grade: score.grade),
+            const SizedBox(width: 10),
+            Text(s.score(score.score), style: theme.textTheme.titleMedium),
             const HelpButton(section: GlossarySection.scoring),
           ],
         ),

@@ -183,7 +183,7 @@ class _TableScreenState extends State<TableScreen> {
               value: value,
               enabled: enabled,
               height: 40,
-              child: Row(children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(text)]),
+              child: Row(children: [Icon(icon, size: 20), const SizedBox(width: 12), Flexible(child: Text(text))]),
             );
         return [
           if (training) ...[
@@ -366,7 +366,6 @@ class _TableArea extends StatelessWidget {
                 isActing: view.actingSeat == i,
                 isHero: i == TableSession.heroSeat,
                 showStyle: controller.session.config.stylesVisible && !controller.session.hiddenStyles[i],
-                onMore: onSeatMenu == null ? null : () => onSeatMenu!(i),
                 hovered: hovered,
               ),
             ),

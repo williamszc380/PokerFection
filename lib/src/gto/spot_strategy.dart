@@ -127,7 +127,7 @@ class DecisionScore {
   /// are split between sizes counts for [sizeWeight].
   final double mixMatch;
 
-  /// Big blinds given up compared with the best action (0 or more).
+  /// Big blinds given up compared with GTO's own mix (0 or more).
   final double evLoss;
 
   /// [evLoss] with the part lost to worse raise sizes counting for
@@ -162,20 +162,32 @@ DecisionScore scoreDecision(SpotStrategy spot, List<double> user) {
     if (group(i) == 2) bestRaise = max(bestRaise, evs[i]);
   }
   final userGroups = [0.0, 0.0, 0.0], gtoGroups = [0.0, 0.0, 0.0];
-  var choiceLoss = 0.0, sizeLoss = 0.0;
   for (var i = 0; i < user.length; i++) {
-    final g = group(i);
-    userGroups[g] += user[i];
-    gtoGroups[g] += gto[i];
-    if (evs[i].isNaN) continue;
-    if (g == 2) {
-      // Raising at all instead of the best choice, then this size instead of the best size.
-      choiceLoss += user[i] * (best - bestRaise);
-      sizeLoss += user[i] * (bestRaise - evs[i]);
-    } else {
-      choiceLoss += user[i] * (best - evs[i]);
-    }
+    userGroups[group(i)] += user[i];
+    gtoGroups[group(i)] += gto[i];
   }
+  // What a mix gives up against the best action: for choosing to fold, call
+  // or raise at all, and then for the raise sizes.
+  (double, double) losses(List<double> mix) {
+    var choice = 0.0, size = 0.0;
+    for (var i = 0; i < mix.length; i++) {
+      if (evs[i].isNaN) continue;
+      if (group(i) == 2) {
+        choice += mix[i] * (best - bestRaise);
+        size += mix[i] * (bestRaise - evs[i]);
+      } else {
+        choice += mix[i] * (best - evs[i]);
+      }
+    }
+    return (choice, size);
+  }
+
+  // Losses count from GTO's own mix: the solver stops a little short of
+  // perfect, so the actions it mixes aren't worth exactly the same, and
+  // playing its mix must not lose anything.
+  final (userChoice, userSize) = losses(user);
+  final (gtoChoice, gtoSize) = losses(gto);
+  final choiceLoss = userChoice - gtoChoice, sizeLoss = userSize - gtoSize;
   var choiceDifference = 0.0;
   for (var g = 0; g < 3; g++) {
     choiceDifference += (userGroups[g] - gtoGroups[g]).abs();

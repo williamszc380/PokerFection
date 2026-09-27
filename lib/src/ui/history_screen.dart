@@ -69,7 +69,7 @@ class HistoryScreen extends StatelessWidget {
                             ],
                           ),
                           subtitle: Text(
-                            '${hand.averageScore == null ? s.notScored : s.score(hand.averageScore!.round())} · '
+                            '${s.score(hand.averageScore!.round())} · '
                             '${s.evLoss} ${hand.evLost.toStringAsFixed(2)} BB'
                             '${hand.result == null ? '' : ' · ${formatSignedBb(hand.result!)}'}',
                             style: muted,
@@ -121,7 +121,7 @@ class RecentScores extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final muted = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60);
-    final scored = session.history.where((h) => h.averageScore != null).toList();
+    final scored = session.history.where((h) => h.decisions.isNotEmpty).toList();
     final scores = session.scores.toList();
     final average = scores.isEmpty ? null : scores.fold(0, (sum, s) => sum + s.score) / scores.length;
     return Container(
@@ -254,12 +254,8 @@ class DecisionView extends StatelessWidget {
               const SizedBox(width: 8),
               if (record.board.isNotEmpty) MiniCards(cards: record.board),
               const Spacer(),
-              if (record.revealed)
-                Text(s.notScored, style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60))
-              else ...[
-                Text('${s.score(record.score.score)}  '),
-                GradeChip(grade: record.score.grade),
-              ],
+              Text('${s.score(record.score.score)}  '),
+              GradeChip(grade: record.score.grade),
             ],
           ),
           const SizedBox(height: 6),

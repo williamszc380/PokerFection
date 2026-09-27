@@ -235,10 +235,8 @@ class TableSession {
   /// Every hand of the session, with the user's scored decisions (Guess the GTO mode).
   final List<HandRecord> history = [];
 
-  /// All scored decisions so far (not the ones where the user looked at
-  /// GTO's answer first).
-  Iterable<DecisionScore> get scores =>
-      history.expand((h) => h.decisions).where((d) => !d.revealed).map((d) => d.score);
+  /// All scored decisions so far.
+  Iterable<DecisionScore> get scores => history.expand((h) => h.decisions).map((d) => d.score);
 
   /// Solved games are needed to score the user or to run GTO bots.
   bool get needsSolver => config.guessGto || hasGtoBots;

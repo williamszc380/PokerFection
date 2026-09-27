@@ -173,8 +173,6 @@ class StringsEn extends S {
   @override
   String get showGto => 'Show GTO';
   @override
-  String get notScored => 'Not scored';
-  @override
   String get randomize => 'RNG';
   @override
   String get playRandomized => 'Play RNG';
@@ -427,11 +425,11 @@ class StringsEn extends S {
             'way GTO mixes its play.',
         GlossaryTerm.potOdds => 'What you must call compared with the pot you could win. Calling pays when '
             'your equity is higher than this share.',
-        GlossaryTerm.evLoss => 'How many BB your percentages give up compared with the best action.',
+        GlossaryTerm.evLoss => "How many BB your percentages give up compared with GTO's own mix. The EV Loss column shows "
+            'each action against the best one.',
         GlossaryTerm.mixMatch => "How close your percentages are to GTO's: 100% means identical.",
         GlossaryTerm.score => '0 to 100: half for the match, half for losing little EV. What counts is how often '
-            'you fold, check or call, and raise; raise sizes count only 10%. Decisions where you use Show GTO '
-            "aren't scored.",
+            'you fold, check or call, and raise; raise sizes count only 10%.',
         GlossaryTerm.grades => 'By EV loss (raise sizes count 10%): Best (up to 0.02 BB), Good (0.08), Inaccuracy (0.25), '
             'Mistake (0.75), Blunder (more).',
         GlossaryTerm.noLimit => 'The betting used here: you can bet or raise any amount, up to all your chips.',

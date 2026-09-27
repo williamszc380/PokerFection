@@ -193,19 +193,15 @@ class TableController extends ChangeNotifier {
   int? heroPlay;
   bool heroDrew = false;
 
-  /// The user looked at GTO's answer before playing: not scored.
-  bool heroRevealed = false;
-
   /// Scores the user's mix (how often to take each action, adding up to 1)
   /// and fixes the action to play: [choice], or one drawn from the mix.
-  void submitMix(List<double> mix, {int? choice, bool revealed = false}) {
+  void submitMix(List<double> mix, {int? choice}) {
     final spot = heroSpot;
     final hand = session.hand;
     if (spot == null || hand == null || heroScore != null) return;
     heroMix = List.unmodifiable(mix);
     heroScore = scoreDecision(spot, mix);
     heroDrew = choice == null;
-    heroRevealed = revealed;
     heroPlay = choice ?? _draw(spot, mix);
     session.history.last.decisions.add(DecisionRecord(
       street: hand.street,
@@ -213,7 +209,6 @@ class TableController extends ChangeNotifier {
       spot: spot,
       mix: heroMix!,
       score: heroScore!,
-      revealed: revealed,
     )..played = heroPlay);
     _notify();
   }
@@ -263,10 +258,20 @@ class TableController extends ChangeNotifier {
   }
 
   /// Turns a bot's cards up or down in the current hand to match the setting.
+  /// A player who folded gets their cards back, face up, while shown.
   void _showRevealed(int seat) {
     final h = hand, view = this.view.seats[seat];
-    if (h == null || h.isFolded(seat) || view.cardsHeld == 0 || h.isOver) return;
+    if (h == null) return;
     final show = session.revealedSeats.contains(seat);
+    if (view.folded) {
+      view
+        ..cards = show ? h.holeCards(seat) : const []
+        ..cardsHeld = show ? 2 : 0
+        ..faceUp = show;
+      return;
+    }
+    // Showdown cards stay up; not yet dealt stays empty.
+    if (view.cardsHeld == 0 || h.isOver) return;
     view
       ..cards = show ? h.holeCards(seat) : const []
       ..faceUp = show;
@@ -321,7 +326,6 @@ class TableController extends ChangeNotifier {
     heroScore = null;
     heroPlay = null;
     heroDrew = false;
-    heroRevealed = false;
   }
 
   @override
@@ -442,10 +446,13 @@ class TableController extends ChangeNotifier {
           ..allIn = event.isAllIn;
         if (event.kind == ActionKind.fold) {
           seat.folded = true;
-          final count = seat.cardsHeld;
-          seat.cardsHeld = 0;
-          for (var i = 0; i < count; i++) {
-            _fly(Anchor.seatCards(event.seat), const Anchor.deck(), _cardMove, fadeOut: true);
+          // The user's cards and shown cards stay up (greyed); the others go to the muck.
+          if (event.seat != TableSession.heroSeat && !session.revealedSeats.contains(event.seat)) {
+            final count = seat.cardsHeld;
+            seat.cardsHeld = 0;
+            for (var i = 0; i < count; i++) {
+              _fly(Anchor.seatCards(event.seat), const Anchor.deck(), _cardMove, fadeOut: true);
+            }
           }
         }
         if (event.chipsAdded > 0) {

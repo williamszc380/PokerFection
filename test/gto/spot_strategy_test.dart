@@ -28,19 +28,20 @@ SpotStrategy exampleSpot() => const SpotStrategy(
 void main() {
   test('scores the example from our discussion', () {
     final score = scoreDecision(exampleSpot(), [0.3, 0.2, 0.4, 0.1]);
-    expect(score.evLoss, closeTo(0.587, 0.001));
+    // Counted from GTO's own mix, which gives up 0.0105 BB against the best action.
+    expect(score.evLoss, closeTo(0.587 - 0.0105, 0.001));
     // Fold / call / raise: 0.3 / 0.2 / 0.5 against 0 / 0.35 / 0.65 (70% alike);
     // raises split 80/20 against 100/0 (80% alike), counting a tenth.
     expect(score.mixMatch, closeTo(0.9 * 0.7 + 0.1 * 0.8, 1e-9));
     // The all-in's 0.209 BB lost to the better size counts a tenth.
-    expect(score.scoredLoss, closeTo(0.378 + 0.0209, 0.001));
+    expect(score.scoredLoss, closeTo(0.378 + 0.0209 - 0.0105, 0.001));
     expect(score.grade, DecisionGrade.mistake);
   });
 
   test('matching GTO exactly scores 100', () {
     final score = scoreDecision(exampleSpot(), [0, 0.35, 0.65, 0]);
     expect(score.mixMatch, 1);
-    expect(score.evLoss, closeTo(0.0105, 0.0001));
+    expect(score.evLoss, 0, reason: 'playing GTO''s own mix loses nothing');
     expect(score.grade, DecisionGrade.best);
     expect(score.score, greaterThanOrEqualTo(98));
   });
@@ -107,7 +108,7 @@ void main() {
     final equity =
         PreflopEquity.fromBytes(ByteData.sublistView(File('assets/preflop_equity.bin').readAsBytesSync()));
     final stacks = [2000, 3500, 1200, 5000];
-    const multiples = [2.0, 2.5, 3.0, 4.0];
+    const multiples = PreflopSettings.defaultRaiseMultiples;
     final rng = Random(7);
     Future<PreflopSolution> solveSubgame(PreflopSpec spec, Float64List? ranges) async =>
         PreflopSolver(PreflopTree(spec), equity, ranges: ranges).solve(iterations: 30);

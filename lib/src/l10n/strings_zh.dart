@@ -173,8 +173,6 @@ class StringsZh extends S {
   @override
   String get showGto => '显示 GTO';
   @override
-  String get notScored => '不计分';
-  @override
   String get randomize => '随机';
   @override
   String get playRandomized => '随机出手';
@@ -413,10 +411,10 @@ class StringsZh extends S {
         GlossaryTerm.mixedStrategy => '同一手牌有时用不同方式打，比如 60% 跟注、40% 加注。GTO 经常这样做以保持难以预测。',
         GlossaryTerm.rng => '随机数生成器：按你设定的百分比让随机来选择行动，就像 GTO 的混合打法。',
         GlossaryTerm.potOdds => '你需要跟注的金额与可赢得的底池之比。当你的权益高于这个比例时，跟注就有利可图。',
-        GlossaryTerm.evLoss => '与最佳行动相比，你的百分比损失了多少 BB。',
+        GlossaryTerm.evLoss => '与 GTO 自己的混合策略相比，你的百分比损失了多少 BB。EV 损失一栏是每个行动与最佳行动的差距。',
         GlossaryTerm.mixMatch => '你的百分比与 GTO 的接近程度：100% 表示完全一致。',
         GlossaryTerm.score => '0 到 100 分：一半看匹配度，一半看 EV 损失是否小。关键是弃牌、过牌或跟注、加注的频率；'
-            '加注尺度只占 10%。使用“显示 GTO”的决策不计分。',
+            '加注尺度只占 10%。',
         GlossaryTerm.grades => '按 EV 损失评定（加注尺度占 10%）：最佳（不超过 0.02 BB）、良好（0.08）、不精确（0.25）、失误（0.75）、严重失误（更多）。',
         GlossaryTerm.noLimit => '这里使用的下注方式：你可以下注或加注任意数额，最多为你的全部筹码。',
         GlossaryTerm.minBet => '允许的最小下注：一个大盲注。',
