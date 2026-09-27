@@ -33,8 +33,8 @@ class PreflopCharts {
   PreflopCharts.parse(String json)
       : _charts = ((jsonDecode(json) as Map<String, dynamic>)['charts'] as Map<String, dynamic>).cast();
 
-  /// The stacks (in BB) there are charts for, deepest first.
-  static const stacks = [100, 50, 25];
+  /// The stacks (in BB) there are charts for, smallest first (as in the game setup).
+  static const stacks = [25, 50, 100];
 
   final Map<String, String> _charts;
 

@@ -238,7 +238,7 @@ class _TableScreenState extends State<TableScreen> {
                     child: session.config.guessGto
                         ? Text(
                             '${s.evLoss} '
-                            '${session.scores.fold(0.0, (sum, d) => sum + d.evLoss).toStringAsFixed(2)} BB · '
+                            '${session.history.fold(0.0, (sum, h) => sum + h.evLost).toStringAsFixed(2)} BB · '
                             '${s.handsPlayed(session.handsFinished)}',
                             style: const TextStyle(color: Color(0xFFFFE082)),
                           )

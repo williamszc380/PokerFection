@@ -28,7 +28,7 @@ class _ChartsScreenState extends State<ChartsScreen> {
   static Future<PreflopCharts>? _charts;
 
   int _players = 6;
-  int _stack = PreflopCharts.stacks.first;
+  int _stack = 100;
   Position _hero = Position.btn;
   ChartSpot _spot = ChartSpot.open;
   Position? _villain;

@@ -15,7 +15,7 @@ import 'glossary.dart';
 import 'table_screen.dart';
 
 /// Quick choices for every opponent's style: random, or one style for all.
-const _opponentChoices = <BotStyle?>[null, BotStyle.gto, BotStyle.tag, BotStyle.lag, BotStyle.station, BotStyle.nit];
+const _opponentChoices = <BotStyle?>[BotStyle.gto, null, BotStyle.tag, BotStyle.lag, BotStyle.station, BotStyle.nit];
 
 /// Where the user sets up a game: the table (top), then the rules (bottom).
 class SetupScreen extends StatefulWidget {
@@ -32,10 +32,10 @@ class _SetupScreenState extends State<SetupScreen> {
 
   /// The last quick choice for the opponents' styles (null = random); unset
   /// once single players were changed.
-  BotStyle? _opponents;
+  BotStyle? _opponents = BotStyle.gto;
   bool _opponentsSet = true;
   bool _customize = false;
-  late List<PlayerInfo> _players = _withStyles(TableConfig.quickPlayers(count: 2, stackBb: 100), null);
+  late List<PlayerInfo> _players = _withStyles(TableConfig.quickPlayers(count: 2, stackBb: 100), BotStyle.gto);
   Position? _position;
   int _ante = 0;
   RaiseRule _raiseRule = RaiseRule.standard;

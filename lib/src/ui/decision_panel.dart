@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../gto/spot_strategy.dart';
@@ -85,6 +86,14 @@ class DecisionPanelState extends State<DecisionPanel> {
   /// GTO's answer was filled in (Show GTO): the decision won't be scored.
   bool _revealed = false;
 
+  /// GTO's answer as last filled in; Show GTO can be pressed again once the
+  /// percentages differ from it.
+  List<int>? _gtoTop;
+  List<int>? _gtoSizes;
+
+  bool get _showingGto =>
+      _gtoTop != null && listEquals(_top, _gtoTop) && listEquals(_sizes, _gtoSizes);
+
   bool get _training => _c.heroSpot != null;
 
   void _reset(List<SpotAction> menu) {
@@ -98,6 +107,8 @@ class DecisionPanelState extends State<DecisionPanel> {
     // unless the user ticks one.
     _draw = _training;
     _revealed = false;
+    _gtoTop = null;
+    _gtoSizes = null;
   }
 
   /// How often the user plays each choice (adding up to 1).
@@ -164,6 +175,8 @@ class DecisionPanelState extends State<DecisionPanel> {
     _top = splitWhole([gto[_rows.fold], gto[_rows.passive], raises.fold(0.0, (a, b) => a + b)], 100);
     if (raises.any((r) => r > 0)) _sizes = splitWhole(raises, 100);
     _revealed = true;
+    _gtoTop = List.of(_top);
+    _gtoSizes = List.of(_sizes);
   });
 
   void _tick(int index) => setState(() {
@@ -273,7 +286,7 @@ class DecisionPanelState extends State<DecisionPanel> {
               const SizedBox(width: 12),
               OutlinedButton.icon(
                 key: const ValueKey('show gto'),
-                onPressed: _revealed ? null : _reveal,
+                onPressed: _showingGto ? null : _reveal,
                 icon: const Icon(Icons.visibility, size: 18),
                 label: Text(s.showGto),
                 style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
@@ -294,11 +307,10 @@ class DecisionPanelState extends State<DecisionPanel> {
     );
   }
 
-  static const _tickWidth = 36.0;
   static const _percentWidth = 40.0;
 
-  /// The rows: fold, check or call and raise (any size) in one column and the
-  /// raise sizes in a second one beside it, or below when there isn't room.
+  /// The rows: fold, check or call and raise (any size), then below them
+  /// each raise size, the same way before and after the flop.
   Widget _choices(BuildContext context, BoxConstraints constraints) {
     final s = S.of(context);
     final menu = _rows.menu;
@@ -312,10 +324,7 @@ class DecisionPanelState extends State<DecisionPanel> {
           for (final i in _rows.aggressive) _sizeLabel(s, menu[i]),
         ]) +
         18;
-    const gap = 17.0;
-    final column = (constraints.maxWidth - gap) / 2;
-    final sideBySide = column >= _tickWidth + nameWidth + (_training ? _percentWidth + 80 : 0);
-    final name = min(nameWidth, (sideBySide ? column : constraints.maxWidth) / 2);
+    final name = min(nameWidth, constraints.maxWidth / 2);
 
     final first = <Widget>[
       _row(
@@ -368,30 +377,8 @@ class DecisionPanelState extends State<DecisionPanel> {
         ),
     ];
 
-    if (!sideBySide) {
-      return SingleChildScrollView(
-        child: Column(children: [...first, const Divider(height: 10), ...sizes]),
-      );
-    }
     return SingleChildScrollView(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: Column(children: first)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Column(children: sizes),
-              ),
-            ),
-          ),
-        ],
-      ),
+      child: Column(children: [...first, const Divider(height: 10), ...sizes]),
     );
   }
 

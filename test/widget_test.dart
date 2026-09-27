@@ -140,7 +140,16 @@ void main() {
     }
     await tester.tap(show);
     await tester.pumpAndSettle();
-    expect(tester.widget<OutlinedButton>(show).onPressed, isNull, reason: 'shown once');
+    expect(tester.widget<OutlinedButton>(show).onPressed, isNull, reason: "GTO's answer is showing");
+    // Changing the percentages makes it pressable again, to go back to GTO's answer.
+    final sliders = find.byType(Slider);
+    await tester.drag(sliders.at(1), const Offset(-60, 0));
+    await tester.drag(sliders.at(0), const Offset(60, 0));
+    await tester.pumpAndSettle();
+    expect(tester.widget<OutlinedButton>(show).onPressed, isNotNull);
+    await tester.tap(show);
+    await tester.pumpAndSettle();
+    expect(tester.widget<OutlinedButton>(show).onPressed, isNull);
     await tester.tap(find.byKey(const ValueKey('play')));
     await tester.pumpAndSettle();
     expect(find.text('Not scored'), findsOneWidget);

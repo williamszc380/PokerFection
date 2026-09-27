@@ -79,8 +79,8 @@ class _RangeScreenState extends State<RangeScreen> {
                 children: [
                   SegmentedButton<bool>(
                     segments: [
-                      ButtonSegment(value: true, label: Text(s.shareOfRange)),
                       ButtonSegment(value: false, label: Text(s.frequency)),
+                      ButtonSegment(value: true, label: Text(s.shareOfRange)),
                     ],
                     selected: {_share},
                     showSelectedIcon: false,

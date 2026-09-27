@@ -23,13 +23,9 @@ String? sizeText(S s, SpotAction a) {
   return share == null ? null : s.potShare(share);
 }
 
-/// Formats chips as big blinds: 250 -> "2.5", 1000 -> "10".
+/// Formats chips as big blinds, always with two decimals: 250 -> "2.50".
 String formatBb(int chips, {bool unit = false}) {
-  final bb = chips / TableConfig.bigBlind;
-  var text = bb.toStringAsFixed(2);
-  if (text.contains('.')) {
-    text = text.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
-  }
+  final text = (chips / TableConfig.bigBlind).toStringAsFixed(2);
   return unit ? '$text BB' : text;
 }
 
