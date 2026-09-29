@@ -98,6 +98,11 @@ abstract class S {
   String get play;
   String get settings;
 
+  // Hand rankings.
+  String get handRankings;
+  String get royalFlush;
+  String handCategory(HandCategory category);
+
   // Preflop Charts.
   String get preflopCharts;
   String get spot;
@@ -127,6 +132,10 @@ abstract class S {
   // Game setup.
   String get newGame;
   String get training;
+
+  /// The two levels of GTO Training.
+  String get simple;
+  String get advanced;
   String get freePlay;
   String get players;
   String get stack;
@@ -163,7 +172,6 @@ abstract class S {
   String get ranges;
   String get history;
   String get shuffleStyles;
-  String get newStylesDealt;
   String get mainMenu;
   String get showRange;
   String get changeStyle;
@@ -201,6 +209,9 @@ abstract class S {
 
   /// Fills in GTO's answer before playing.
   String get showGto;
+
+  /// After the flop with more than two players: GTO's answer is approximate.
+  String get approxMultiway;
   String get randomize;
   String get playRandomized;
   String get continueHand;

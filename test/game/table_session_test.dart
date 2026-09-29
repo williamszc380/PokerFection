@@ -11,6 +11,8 @@ import 'package:pokerfection/src/game/table_session.dart';
 import '../helpers.dart';
 
 void main() {
+  stackEditTests();
+  levelTests();
   test('bots only make legal decisions, across many table setups', () {
     for (var seed = 0; seed < 20; seed++) {
       final rng = Random(seed);
@@ -98,5 +100,59 @@ void main() {
     expect(p('Ks Kh'), lessThan(p('Qs Qh')));
     expect(p('7c 2d'), greaterThan(0.9));
     expect(handClassLabel(PlayingCard.parse('Ts'), PlayingCard.parse('9s')), 'T9s');
+  });
+}
+
+void _finish(TableSession session) {
+  final hand = session.hand!;
+  while (!hand.isOver) {
+    if (session.isHeroTurn) {
+      hand.act(hand.legalActions().canCheck ? const PlayerAction.check() : const PlayerAction.call());
+    } else {
+      hand.act(session.botDecision());
+    }
+  }
+  session.finishHand();
+}
+
+void stackEditTests() {
+  test('a stack set during the game applies from the next hand', () {
+    final session = TableSession(TableConfig.quick(playerCount: 3, stackBb: 100), random: Random(1));
+    session.startHand();
+    session.setStack(1, 4000);
+    expect(session.upcoming.stacks[1], 4000);
+    _finish(session);
+    session.startHand();
+    expect(session.hand!.startingStackOf(1), 4000);
+    expect(session.stackEdits, isEmpty);
+  });
+
+  test('with stacks reset every hand, a stack set stays the new one', () {
+    final session = TableSession(
+      TableConfig.quick(playerCount: 3, stackBb: 100, resetStacksEachHand: true),
+      random: Random(2),
+    );
+    session.startHand();
+    session.setStack(2, 2500);
+    for (var i = 0; i < 3; i++) {
+      _finish(session);
+      session.startHand();
+      expect(session.hand!.startingStackOf(2), 2500);
+    }
+  });
+}
+
+void levelTests() {
+  test('the training level switches between hands, and each hand records its own', () {
+    final session = TableSession(TableConfig.quick(playerCount: 2, guessGto: true), random: Random(3));
+    session.startHand();
+    expect(session.history.last.advanced, isFalse, reason: 'simple by default');
+    session.setAdvanced(true);
+    expect(session.advanced, isFalse, reason: 'not during the hand');
+    _finish(session);
+    session.startHand();
+    expect(session.advanced, isTrue);
+    expect(session.history.last.advanced, isTrue);
+    expect(session.history.first.advanced, isFalse);
   });
 }

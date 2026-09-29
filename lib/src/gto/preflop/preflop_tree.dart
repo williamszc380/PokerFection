@@ -31,8 +31,9 @@ class PreflopSpec {
   final int ante;
   final RaiseRule raiseRule;
 
-  /// The user's raise sizes, as multiples of the bet they face: by default
-  /// raise to 2, 2.5, 3, 4 or 5 BB when first in, or 2x to 5x an open or a 3-bet.
+  /// The user's raise sizes, as multiples of the bet they face. By default
+  /// 2x, 2.5x, 3x, 4x, 6x, 10x and 15x: first in, a raise to 2 to 15 BB;
+  /// against an open or a 3-bet, 2x to 15x it.
   final List<double> raiseMultiples;
 
   /// Actions already taken before the solved part starts. Empty for the
@@ -112,7 +113,7 @@ class PreflopSettings {
     this.pushFoldOnly = false,
   });
 
-  static const defaultRaiseMultiples = [2.0, 2.5, 3.0, 4.0, 5.0];
+  static const defaultRaiseMultiples = [2.0, 2.5, 3.0, 4.0, 6.0, 10.0, 15.0];
 
   /// A raise to at least this share of the player's whole stack is left
   /// out: it is practically all-in, and the all-in choice covers it.

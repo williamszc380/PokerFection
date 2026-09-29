@@ -139,6 +139,10 @@ class DecisionScore {
   /// 0-100: half for matching the mix, half for not losing EV (losing
   /// 0.25 bb costs about 32 of those 50 points).
   int get score => (50 * mixMatch + 50 * exp(-scoredLoss / 0.25)).round();
+
+  /// 0-100 for one action played (simple training), where matching a mix
+  /// means nothing: 100, minus a point per 0.01 BB given up.
+  int get playScore => (100 - scoredLoss * 100).clamp(0, 100).round();
 }
 
 /// How much raise sizes count in a score, next to the choice between
@@ -187,7 +191,8 @@ DecisionScore scoreDecision(SpotStrategy spot, List<double> user) {
   // playing its mix must not lose anything.
   final (userChoice, userSize) = losses(user);
   final (gtoChoice, gtoSize) = losses(gto);
-  final choiceLoss = userChoice - gtoChoice, sizeLoss = userSize - gtoSize;
+  // Each part on its own, so noise in GTO's sizes can't hide a worse choice.
+  final choiceLoss = max(0.0, userChoice - gtoChoice), sizeLoss = max(0.0, userSize - gtoSize);
   var choiceDifference = 0.0;
   for (var g = 0; g < 3; g++) {
     choiceDifference += (userGroups[g] - gtoGroups[g]).abs();

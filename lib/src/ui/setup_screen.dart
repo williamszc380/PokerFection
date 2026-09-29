@@ -28,6 +28,9 @@ class SetupScreen extends StatefulWidget {
 class _SetupScreenState extends State<SetupScreen> {
   final _random = Random();
   bool _training = true;
+
+  /// Advanced training (percentages and scores) instead of simple.
+  bool _advanced = false;
   int _stackBb = 100;
 
   /// The last quick choice for the opponents' styles (null = random); unset
@@ -97,6 +100,7 @@ class _SetupScreenState extends State<SetupScreen> {
       preflopSizes: _preflopSizes,
       postflopSizes: _postflopSizes,
       guessGto: _training,
+      advanced: _advanced,
       showStyles: _showStyles,
       showHands: _showHands,
     );
@@ -132,6 +136,18 @@ class _SetupScreenState extends State<SetupScreen> {
                   const HelpButton(section: GlossarySection.modes),
                 ],
               ),
+              if (_training) ...[
+                const SizedBox(height: 8),
+                SegmentedButton<bool>(
+                  segments: [
+                    ButtonSegment(value: false, label: Text(s.simple)),
+                    ButtonSegment(value: true, label: Text(s.advanced)),
+                  ],
+                  selected: {_advanced},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (v) => setState(() => _advanced = v.single),
+                ),
+              ],
               _Section(
                 title: s.players,
                 child: _choices<int>(
@@ -321,7 +337,7 @@ class _SetupScreenState extends State<SetupScreen> {
         },
       ),
     );
-    return answer.whenComplete(text.dispose);
+    return answer;
   }
 
   Widget _rules(BuildContext context, S s) {

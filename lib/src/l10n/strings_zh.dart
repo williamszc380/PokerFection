@@ -16,6 +16,23 @@ class StringsZh extends S {
   String get settings => '设置';
 
   @override
+  String get handRankings => '牌型大小';
+  @override
+  String get royalFlush => '皇家同花顺';
+  @override
+  String handCategory(HandCategory category) => switch (category) {
+        HandCategory.highCard => '高牌',
+        HandCategory.pair => '一对',
+        HandCategory.twoPair => '两对',
+        HandCategory.trips => '三条',
+        HandCategory.straight => '顺子',
+        HandCategory.flush => '同花',
+        HandCategory.fullHouse => '葫芦',
+        HandCategory.quads => '四条',
+        HandCategory.straightFlush => '同花顺',
+      };
+
+  @override
   String get preflopCharts => '翻前范围表';
   @override
   String get spot => '局面';
@@ -60,6 +77,10 @@ class StringsZh extends S {
   String get newGame => '新游戏';
   @override
   String get training => 'GTO 训练';
+  @override
+  String get simple => '简单';
+  @override
+  String get advanced => '进阶';
   @override
   String get freePlay => '自由对局';
   @override
@@ -139,8 +160,6 @@ class StringsZh extends S {
   @override
   String get shuffleStyles => '打乱打法风格';
   @override
-  String get newStylesDealt => '已随机更换打法风格。';
-  @override
   String get mainMenu => '主菜单';
   @override
   String get showRange => '范围';
@@ -172,6 +191,8 @@ class StringsZh extends S {
   String potOdds(int percent) => '底池赔率 $percent%';
   @override
   String get showGto => '显示 GTO';
+  @override
+  String get approxMultiway => '近似答案：多人底池';
   @override
   String get randomize => '随机';
   @override
@@ -363,9 +384,10 @@ class StringsZh extends S {
 
   @override
   String definition(GlossaryTerm term) => switch (term) {
-        GlossaryTerm.training => '在每个决策点，设定你认为 GTO 弃牌、跟注、加注（以及加注多少）的频率，勾选你要打的'
-            '行动，然后查看 GTO 的答案和你的得分。翻牌前机器人按 GTO 打法行动，让你的局面都来自 GTO 对局；翻牌后'
-            '才按它们各自的风格行动。',
+        GlossaryTerm.training => '与机器人对战，向 GTO 学习。简单：正常打牌；出现失误或严重失误时会显示 GTO 的答案，'
+            '随时可以用“显示 GTO”查看。进阶：在每个决策点设定你认为 GTO 弃牌、跟注、加注（以及加注多少）的频率，'
+            '然后查看 GTO 的答案和你的得分。可在 ☰ 中于两手牌之间切换。翻牌前机器人按 GTO 打法行动；翻牌后才按'
+            '它们各自的风格行动。',
         GlossaryTerm.play => '与机器人对战，不计分，就像真实牌局。',
         GlossaryTerm.utg => '枪口位：翻牌前第一个行动。',
         GlossaryTerm.utg1 => 'UTG 之后的座位。',
@@ -413,8 +435,9 @@ class StringsZh extends S {
         GlossaryTerm.potOdds => '你需要跟注的金额与可赢得的底池之比。当你的权益高于这个比例时，跟注就有利可图。',
         GlossaryTerm.evLoss => '与 GTO 自己的混合策略相比，你的百分比损失了多少 BB。EV 损失一栏是每个行动与最佳行动的差距。',
         GlossaryTerm.mixMatch => '你的百分比与 GTO 的接近程度：100% 表示完全一致。',
-        GlossaryTerm.score => '0 到 100 分：一半看匹配度，一半看 EV 损失是否小。关键是弃牌、过牌或跟注、加注的频率；'
-            '加注尺度只占 10%。',
+        GlossaryTerm.score => '0 到 100 分。简单：每次行动 100 分，每损失 0.01 BB 扣 1 分。进阶：一半看匹配度，'
+            '一半看 EV 损失是否小；关键是弃牌、过牌或跟注、加注的频率，加注尺度只占 10%。历史记录中，白色边框'
+            '表示进阶模式下的手牌。',
         GlossaryTerm.grades => '按 EV 损失评定（加注尺度占 10%）：最佳（不超过 0.02 BB）、良好（0.08）、不精确（0.25）、失误（0.75）、严重失误（更多）。',
         GlossaryTerm.noLimit => '这里使用的下注方式：你可以下注或加注任意数额，最多为你的全部筹码。',
         GlossaryTerm.minBet => '允许的最小下注：一个大盲注。',

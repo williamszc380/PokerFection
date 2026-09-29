@@ -179,6 +179,25 @@ void main() {
     });
   }
 
+  test('players checking along take their share at showdown', () {
+    final board = cards('Kh Qd 7c 4s 2h');
+    final spec = PostflopSpec(board: board, pot: 1000, stacks: [1000, 1000], bigBlind: 100, botBetSizes: const []);
+    final oop = rangeOf({'77': 1 / 3, '65': 1 / 16}, board);
+    final ip = rangeOf({'AQ': 1 / 12}, board);
+    final sets = comboIndex(PlayingCard.parse('7s').index, PlayingCard.parse('7h').index);
+    double checkValue(List<Float64List> others) {
+      final solution = PostflopSolver(spec, [oop, ip, ...others]).solve(iterations: 300);
+      final root = solution.tree.root as PostflopDecision;
+      return solution.value(root, root.actions.indexWhere((a) => a.move == PostflopMove.check), sets);
+    }
+
+    final alone = checkValue(const []);
+    // A third player with kings: a set of sevens never wins.
+    expect(checkValue([rangeOf({'KK': 1 / 3}, board)]), lessThan(alone * 0.05));
+    // A third player with air: a set of sevens always beats them.
+    expect(checkValue([rangeOf({'65': 1 / 16}, board)]), closeTo(alone, alone * 0.05));
+  });
+
   test('solve times for a typical spot', () {
     // Wide ranges: every hand with weight 0.5.
     final wide = Float64List(comboCount)..fillRange(0, comboCount, 0.5);

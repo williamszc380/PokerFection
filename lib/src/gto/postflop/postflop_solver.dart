@@ -44,6 +44,83 @@ class PostflopHands {
   int get length => full.length;
 }
 
+/// The complete boards a street's showdowns are averaged over: the board
+/// itself on the river, every river on the turn, and [flopRunouts] turn and
+/// river pairs on the flop (the same ones every time for a board).
+List<List<int>> runoutBoards(List<int> board, {int flopRunouts = 40}) {
+  final free = [for (var c = 0; c < 52; c++) if (!board.contains(c)) c];
+  switch (board.length) {
+    case 5:
+      return [board];
+    case 4:
+      return [for (final river in free) [...board, river]];
+    default:
+      final pairs = [
+        for (var i = 0; i < free.length; i++)
+          for (var j = i + 1; j < free.length; j++) (free[i], free[j]),
+      ]..shuffle(Random(board.fold<int>(17, (h, c) => h * 31 + c)));
+      return [for (final (turn, river) in pairs.take(flopRunouts)) [...board, turn, river]];
+  }
+}
+
+/// "The field" for approximate answers when more than two players are in
+/// the pot: all the opponents' hands in one range, each weighted by how
+/// often it is the best of all of theirs (against the other opponents'
+/// [ranges], over the runouts, ties counting half). The field plays like
+/// whichever opponent holds the best hand.
+Float64List strongestOfField(List<int> board, List<Float64List> ranges, {int flopRunouts = 20}) {
+  final hands = PostflopHands(board);
+  final n = hands.length, cardA = hands.cardA, cardB = hands.cardB;
+  final best = List.generate(ranges.length, (_) => Float64List(n));
+  final beats = List.generate(ranges.length, (_) => Float64List(n));
+  final counted = Float64List(n);
+  final weights = Float64List(n), wins = Float64List(n);
+  final cardSum = Float64List(52), below = Float64List(52), group = Float64List(52);
+  for (final complete in runoutBoards(board, flopRunouts: flopRunouts)) {
+    final ranking = RunoutRanking(complete, cardA, cardB);
+    // How often each hand beats each opponent's range here.
+    for (var j = 0; j < ranges.length; j++) {
+      weights.fillRange(0, n, 0);
+      cardSum.fillRange(0, 52, 0);
+      var total = 0.0;
+      for (final c in ranking.order) {
+        final w = ranges[j][hands.full[c]];
+        weights[c] = w;
+        total += w;
+        cardSum[cardA[c]] += w;
+        cardSum[cardB[c]] += w;
+      }
+      wins.fillRange(0, n, 0);
+      addShowdownWins(ranking, weights, wins, cardA, cardB, below, group);
+      for (final c in ranking.order) {
+        // Their hands that share no card with this one.
+        final possible = total - cardSum[cardA[c]] - cardSum[cardB[c]] + weights[c];
+        beats[j][c] = possible > 0 ? wins[c] / possible : 1;
+      }
+    }
+    // Held by opponent k, how often it beats all the others.
+    for (final c in ranking.order) {
+      counted[c]++;
+      for (var k = 0; k < ranges.length; k++) {
+        var product = 1.0;
+        for (var j = 0; j < ranges.length; j++) {
+          if (j != k) product *= beats[j][c];
+        }
+        best[k][c] += product;
+      }
+    }
+  }
+  final field = Float64List(comboCount);
+  for (var c = 0; c < n; c++) {
+    if (counted[c] == 0) continue;
+    final combo = hands.full[c];
+    for (var k = 0; k < ranges.length; k++) {
+      field[combo] += ranges[k][combo] * best[k][c] / counted[c];
+    }
+  }
+  return field;
+}
+
 /// Strategies and action values for one street.
 class PostflopSolution {
   PostflopSolution(this.tree, this.hands, this.strategy, this.values);
@@ -72,11 +149,21 @@ class PostflopSolution {
 /// each hand gets its equity share of the pot over the cards still to come
 /// (all rivers on the turn; a sample of turn/river pairs on the flop).
 /// The next street is solved again when it is reached.
+///
+/// More players in the pot (a greedy approximation): ranges after the first
+/// two belong to players who only check along to showdown. A hand then wins
+/// only as often as it also beats each of them, which takes value from both
+/// solved players' hands, and a player whose opponent folds still has to
+/// beat them at showdown.
 class PostflopSolver implements BranchSolver {
   /// [ranges]: each player's weight on every combination (0-1325), in the
-  /// order of [PostflopSpec.stacks] (first to act first).
-  factory PostflopSolver(PostflopSpec spec, List<Float64List> ranges, {int flopRunouts = 40}) =>
-      PostflopSolver.part(spec, ranges, flopRunouts: flopRunouts);
+  /// order of [PostflopSpec.stacks] (first to act first), then the ranges
+  /// of any other players checking along. With [othersFoldToBets], those
+  /// players fold as soon as anyone bets, and only a checked-down pot has
+  /// to beat them.
+  factory PostflopSolver(PostflopSpec spec, List<Float64List> ranges,
+          {int flopRunouts = 40, bool othersFoldToBets = false}) =>
+      PostflopSolver.part(spec, ranges, flopRunouts: flopRunouts, othersFoldToBets: othersFoldToBets);
 
   /// Solves only the decisions in [owned] (all when null), for splitting the
   /// work across threads; decisions in [frontier] are handled by workers
@@ -87,6 +174,7 @@ class PostflopSolver implements BranchSolver {
     Iterable<int>? owned,
     List<int> frontier = const [],
     int flopRunouts = 40,
+    bool othersFoldToBets = false,
   }) {
     final hands = PostflopHands(spec.board);
     final tree = PostflopTree(spec, hands: hands.length);
@@ -111,7 +199,7 @@ class PostflopSolver implements BranchSolver {
       slots[frontier[i]] = i;
     }
     return PostflopSolver._(spec, tree, hands, ranges, flopRunouts, n, width, _depthOf(tree.root) + 2,
-        offsets, storage, slots, frontier.length);
+        offsets, storage, slots, frontier.length, othersFoldToBets);
   }
 
   PostflopSolver._(
@@ -127,6 +215,7 @@ class PostflopSolver implements BranchSolver {
     int storage,
     this._slots,
     int frontierCount,
+    this._othersFoldToBets,
   )   : _n = n,
         _width = width,
         _regrets = Float64List(storage),
@@ -144,6 +233,7 @@ class PostflopSolver implements BranchSolver {
         _actionValues = Float64List(depth * width),
         _strategy = Float64List(depth * width),
         _acc = Float64List(n),
+        _winsOnRunout = Float64List(n),
         _valid = Float64List(n),
         _weights = Float64List(n),
         _rootReach = Float64List(2 * n),
@@ -157,6 +247,46 @@ class PostflopSolver implements BranchSolver {
       }
     }
     _setUpRunouts(flopRunouts);
+    if (ranges.length > 2) _setUpOthers(ranges.sublist(2));
+  }
+
+  /// With other players checking along: for each runout, how often each
+  /// hand beats all of them (ties count half), and the average over runouts.
+  final List<Float64List> _beatOthers = [];
+  final bool _othersFoldToBets;
+  Float64List? _beatOthersOnAverage;
+
+  void _setUpOthers(List<Float64List> others) {
+    final n = _n, cardA = hands.cardA, cardB = hands.cardB;
+    final average = Float64List(n);
+    final weights = Float64List(n), wins = Float64List(n), cardSum = Float64List(52);
+    for (final runout in _runouts) {
+      final beat = Float64List(n)..fillRange(0, n, 1);
+      for (final range in others) {
+        weights.fillRange(0, n, 0);
+        cardSum.fillRange(0, 52, 0);
+        var total = 0.0;
+        for (final c in runout.order) {
+          final w = range[hands.full[c]];
+          weights[c] = w;
+          total += w;
+          cardSum[cardA[c]] += w;
+          cardSum[cardB[c]] += w;
+        }
+        wins.fillRange(0, n, 0);
+        addShowdownWins(runout, weights, wins, cardA, cardB, _below, _group);
+        for (final c in runout.order) {
+          // Their hands that share no card with this one.
+          final possible = total - cardSum[cardA[c]] - cardSum[cardB[c]] + weights[c];
+          beat[c] *= possible > 0 ? wins[c] / possible : 1;
+        }
+      }
+      _beatOthers.add(beat);
+      for (var c = 0; c < n; c++) {
+        average[c] += beat[c] / _runouts.length;
+      }
+    }
+    _beatOthersOnAverage = average;
   }
 
   final PostflopSpec spec;
@@ -188,6 +318,7 @@ class PostflopSolver implements BranchSolver {
   final Float64List _actionValues;
   final Float64List _strategy;
   final Float64List _acc;
+  final Float64List _winsOnRunout;
   final Float64List _valid;
   final Float64List _weights;
   final Float64List _rootReach;
@@ -227,33 +358,17 @@ class PostflopSolver implements BranchSolver {
 
   void _setUpRunouts(int flopRunouts) {
     final board = spec.board;
-    final used = List<bool>.filled(52, false);
-    for (final c in board) {
-      used[c] = true;
+    final boards = runoutBoards(board, flopRunouts: flopRunouts);
+    for (final complete in boards) {
+      _runouts.add(RunoutRanking(complete, hands.cardA, hands.cardB));
     }
-    final free = [for (var c = 0; c < 52; c++) if (!used[c]) c];
-    switch (board.length) {
-      case 5:
-        _runouts.add(RunoutRanking(board, hands.cardA, hands.cardB));
-        _runoutsPerPair = 1;
-      case 4:
-        for (final river in free) {
-          _runouts.add(RunoutRanking([...board, river], hands.cardA, hands.cardB));
-        }
-        _runoutsPerPair = (free.length - 4).toDouble(); // rivers left once both hands are out
-      default:
-        final pairs = [
-          for (var i = 0; i < free.length; i++)
-            for (var j = i + 1; j < free.length; j++) (free[i], free[j]),
-        ]..shuffle(Random(board.fold<int>(17, (h, c) => h * 31 + c)));
-        final chosen = pairs.take(flopRunouts).toList();
-        for (final (turn, river) in chosen) {
-          _runouts.add(RunoutRanking([...board, turn, river], hands.cardA, hands.cardB));
-        }
-        // Of all turn/river pairs, the share that avoids four more cards.
-        final all = pairs.length, open = (free.length - 4) * (free.length - 5) / 2;
-        _runoutsPerPair = chosen.length * open / all;
-    }
+    final free = 52 - board.length;
+    _runoutsPerPair = switch (board.length) {
+      5 => 1,
+      4 => (free - 4).toDouble(), // rivers left once both hands are out
+      // Of all turn/river pairs, the share that avoids four more cards.
+      _ => boards.length * ((free - 4) * (free - 5) / 2) / (free * (free - 1) / 2),
+    };
   }
 
   PostflopSolution solve({required int iterations, void Function(int done, int total)? onProgress}) {
@@ -594,18 +709,40 @@ class PostflopSolver implements BranchSolver {
       final weightsAt = _reachAt[depth * 2 + q];
       _disjointWeight(weightsAt);
       final valid = _valid;
+      // With others folding to bets, only a checked-down pot has to beat them.
+      final beatOthers =
+          _othersFoldToBets && (t.bets[0] > 0 || t.bets[1] > 0) ? null : _beatOthersOnAverage;
       if (t.foldedBy >= 0) {
-        final u = (t.foldedBy == p ? -t.bets[p] : potEnd - t.bets[p]).toDouble();
-        for (var c = 0; c < n; c++) {
-          out[outBase + c] = u * valid[c];
+        if (t.foldedBy == p || beatOthers == null) {
+          final u = (t.foldedBy == p ? -t.bets[p] : potEnd - t.bets[p]).toDouble();
+          for (var c = 0; c < n; c++) {
+            out[outBase + c] = u * valid[c];
+          }
+        } else {
+          // The pot, if this hand also beats the players checking along.
+          for (var c = 0; c < n; c++) {
+            out[outBase + c] = (potEnd * beatOthers[c] - t.bets[p]) * valid[c];
+          }
         }
         continue;
       }
       final acc = _acc, weights = _weights;
       acc.fillRange(0, n, 0);
       weights.setRange(0, n, _reach, weightsAt);
-      for (final runout in _runouts) {
-        addShowdownWins(runout, weights, acc, hands.cardA, hands.cardB, _below, _group);
+      if (beatOthers == null) {
+        for (final runout in _runouts) {
+          addShowdownWins(runout, weights, acc, hands.cardA, hands.cardB, _below, _group);
+        }
+      } else {
+        final wins = _winsOnRunout;
+        for (var r = 0; r < _runouts.length; r++) {
+          wins.fillRange(0, n, 0);
+          addShowdownWins(_runouts[r], weights, wins, hands.cardA, hands.cardB, _below, _group);
+          final beat = _beatOthers[r];
+          for (var c = 0; c < n; c++) {
+            acc[c] += wins[c] * beat[c];
+          }
+        }
       }
       final scale = potEnd / _runoutsPerPair;
       final bet = t.bets[p].toDouble();

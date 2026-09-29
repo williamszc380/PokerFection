@@ -19,7 +19,7 @@ class HistoryScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final hands = session.history.where((h) => h.decisions.isNotEmpty).toList().reversed.toList();
-    final scores = session.scores.toList();
+    final scores = session.points.toList();
     final muted = theme.textTheme.bodySmall?.copyWith(color: Colors.white60);
     final s = S.of(context);
 
@@ -46,7 +46,7 @@ class HistoryScreen extends StatelessWidget {
                               s.averageScore,
                               scores.isEmpty
                                   ? '–'
-                                  : (scores.fold(0, (sum, d) => sum + d.score) / scores.length).toStringAsFixed(0),
+                                  : (scores.fold(0, (sum, p) => sum + p) / scores.length).toStringAsFixed(0),
                             ),
                             // Every decision loses EV, scored or not.
                             _stat(theme, s.evLoss,
@@ -69,6 +69,7 @@ class HistoryScreen extends StatelessWidget {
                             ],
                           ),
                           subtitle: Text(
+                            '${hand.advanced ? s.advanced : s.simple} · '
                             '${s.score(hand.averageScore!.round())} · '
                             '${s.evLoss} ${hand.evLost.toStringAsFixed(2)} BB'
                             '${hand.result == null ? '' : ' · ${formatSignedBb(hand.result!)}'}',
@@ -122,8 +123,8 @@ class RecentScores extends StatelessWidget {
   Widget build(BuildContext context) {
     final muted = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60);
     final scored = session.history.where((h) => h.decisions.isNotEmpty).toList();
-    final scores = session.scores.toList();
-    final average = scores.isEmpty ? null : scores.fold(0, (sum, s) => sum + s.score) / scores.length;
+    final scores = session.points.toList();
+    final average = scores.isEmpty ? null : scores.fold(0, (sum, p) => sum + p) / scores.length;
     return Container(
       height: 42,
       color: const Color(0xFF0E1316),
@@ -147,6 +148,7 @@ class RecentScores extends StatelessWidget {
                         padding: const EdgeInsets.only(left: _gap),
                         child: _ScoreBox(
                           score: hand.averageScore,
+                          advanced: hand.advanced,
                           size: _box,
                           onTap: () => showDialog<void>(
                             context: context,
@@ -173,9 +175,12 @@ class RecentScores extends StatelessWidget {
 
 /// One score in a colored square ("–" before there is one).
 class _ScoreBox extends StatelessWidget {
-  const _ScoreBox({required this.score, required this.size, this.onTap});
+  const _ScoreBox({required this.score, required this.size, this.onTap, this.advanced = false});
 
   final double? score;
+
+  /// A hand played in advanced training: outlined in white.
+  final bool advanced;
   final double size;
   final VoidCallback? onTap;
 
@@ -184,7 +189,10 @@ class _ScoreBox extends StatelessWidget {
     final s = score;
     return Material(
       color: s == null ? Colors.white12 : scoreColor(s),
-      borderRadius: BorderRadius.circular(5),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(5),
+        side: advanced ? const BorderSide(color: Colors.white, width: 2) : BorderSide.none,
+      ),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(5),
@@ -254,7 +262,7 @@ class DecisionView extends StatelessWidget {
               const SizedBox(width: 8),
               if (record.board.isNotEmpty) MiniCards(cards: record.board),
               const Spacer(),
-              Text('${s.score(record.score.score)}  '),
+              Text('${s.score(record.points)}  '),
               GradeChip(grade: record.score.grade),
             ],
           ),

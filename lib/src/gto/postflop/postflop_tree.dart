@@ -27,8 +27,10 @@ class PostflopSpec {
     if (hero < -1 || hero > 1) throw ArgumentError('No such player: $hero');
   }
 
-  /// The user's sizes, for bets and raises alike, at every decision.
-  static const defaultHeroSizes = [0.25, 0.33, 0.5, 0.75, 1.0, 1.5];
+  /// The user's sizes, for bets and raises alike, at every decision: steps of
+  /// 0.25 up to the pot, 0.5 up to twice the pot, then 3x and 5x (sizes
+  /// bigger than the stack aren't offered).
+  static const defaultHeroSizes = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0];
 
   /// Bots use fewer sizes, and raise only against the first bet (after
   /// that they can still go all-in): every size adds to the work.

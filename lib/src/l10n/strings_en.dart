@@ -16,6 +16,23 @@ class StringsEn extends S {
   String get settings => 'Settings';
 
   @override
+  String get handRankings => 'Hand Rankings';
+  @override
+  String get royalFlush => 'Royal Flush';
+  @override
+  String handCategory(HandCategory category) => switch (category) {
+        HandCategory.highCard => 'High Card',
+        HandCategory.pair => 'Pair',
+        HandCategory.twoPair => 'Two Pair',
+        HandCategory.trips => 'Three of a Kind',
+        HandCategory.straight => 'Straight',
+        HandCategory.flush => 'Flush',
+        HandCategory.fullHouse => 'Full House',
+        HandCategory.quads => 'Four of a Kind',
+        HandCategory.straightFlush => 'Straight Flush',
+      };
+
+  @override
   String get preflopCharts => 'Preflop Charts';
   @override
   String get spot => 'Spot';
@@ -60,6 +77,10 @@ class StringsEn extends S {
   String get newGame => 'New Game';
   @override
   String get training => 'GTO Training';
+  @override
+  String get simple => 'Simple';
+  @override
+  String get advanced => 'Advanced';
   @override
   String get freePlay => 'Free Play';
   @override
@@ -139,8 +160,6 @@ class StringsEn extends S {
   @override
   String get shuffleStyles => 'Shuffle Play Styles';
   @override
-  String get newStylesDealt => 'New random play styles.';
-  @override
   String get mainMenu => 'Main Menu';
   @override
   String get showRange => 'Range';
@@ -172,6 +191,8 @@ class StringsEn extends S {
   String potOdds(int percent) => 'Pot Odds $percent%';
   @override
   String get showGto => 'Show GTO';
+  @override
+  String get approxMultiway => 'Approximate answer: multiway pot';
   @override
   String get randomize => 'RNG';
   @override
@@ -363,9 +384,11 @@ class StringsEn extends S {
 
   @override
   String definition(GlossaryTerm term) => switch (term) {
-        GlossaryTerm.training => 'At every decision, set how often you think GTO folds, calls or raises (and '
-            "how much), tick what you'll play, then see GTO's answer and your score. Preflop, the bots play "
-            'GTO so your spots come from GTO play; their styles apply after the flop.',
+        GlossaryTerm.training => "Play against the bots and learn from GTO. Simple: play normally; after a "
+            "Mistake or a Blunder, GTO's answer shows, and Show GTO shows it any time. Advanced: at every "
+            "decision, set how often you think GTO folds, calls or raises (and how much), then see GTO's "
+            'answer and your score. Switch between them in ☰, between hands. Preflop, the bots play GTO; '
+            'their styles apply after the flop.',
         GlossaryTerm.play => 'Play against the bots without scores, like a real game.',
         GlossaryTerm.utg => 'Under the gun: first to act before the flop.',
         GlossaryTerm.utg1 => 'The seat after UTG.',
@@ -428,8 +451,10 @@ class StringsEn extends S {
         GlossaryTerm.evLoss => "How many BB your percentages give up compared with GTO's own mix. The EV Loss column shows "
             'each action against the best one.',
         GlossaryTerm.mixMatch => "How close your percentages are to GTO's: 100% means identical.",
-        GlossaryTerm.score => '0 to 100: half for the match, half for losing little EV. What counts is how often '
-            'you fold, check or call, and raise; raise sizes count only 10%.',
+        GlossaryTerm.score => '0 to 100. Simple: each play scores 100, minus a point per 0.01 BB it gives up. '
+            'Advanced: half for the match, half for losing little EV; what counts is how often you fold, check '
+            'or call, and raise, and raise sizes count only 10%. In the history, a white border marks Advanced '
+            'hands.',
         GlossaryTerm.grades => 'By EV loss (raise sizes count 10%): Best (up to 0.02 BB), Good (0.08), Inaccuracy (0.25), '
             'Mistake (0.75), Blunder (more).',
         GlossaryTerm.noLimit => 'The betting used here: you can bet or raise any amount, up to all your chips.',

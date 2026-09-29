@@ -11,7 +11,15 @@ class DecisionRecord {
     required this.spot,
     required this.mix,
     required this.score,
+    this.oneAction = false,
   });
+
+  /// One action played (simple training) rather than a mix: scored by
+  /// [DecisionScore.playScore].
+  final bool oneAction;
+
+  /// The decision's score, 0-100.
+  int get points => oneAction ? score.playScore : score.score;
 
   final Street street;
   final List<PlayingCard> board;
@@ -27,7 +35,15 @@ class DecisionRecord {
 
 /// The user's scored decisions in one hand.
 class HandRecord {
-  HandRecord({required this.handNumber, required this.holeCards, required this.position});
+  HandRecord({
+    required this.handNumber,
+    required this.holeCards,
+    required this.position,
+    this.advanced = false,
+  });
+
+  /// Played in advanced training (percentages), not simple.
+  final bool advanced;
 
   final int handNumber;
   final List<PlayingCard> holeCards;
@@ -39,7 +55,8 @@ class HandRecord {
 
   double? get averageScore => decisions.isEmpty
       ? null
-      : decisions.fold(0, (sum, d) => sum + d.score.score) / decisions.length;
+      : decisions.fold(0, (sum, d) => sum + d.points) / decisions.length;
 
   double get evLost => decisions.fold(0.0, (sum, d) => sum + d.score.evLoss);
+
 }

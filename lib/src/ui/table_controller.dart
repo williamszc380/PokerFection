@@ -195,7 +195,7 @@ class TableController extends ChangeNotifier {
 
   /// Scores the user's mix (how often to take each action, adding up to 1)
   /// and fixes the action to play: [choice], or one drawn from the mix.
-  void submitMix(List<double> mix, {int? choice}) {
+  void submitMix(List<double> mix, {int? choice, bool oneAction = false}) {
     final spot = heroSpot;
     final hand = session.hand;
     if (spot == null || hand == null || heroScore != null) return;
@@ -209,6 +209,7 @@ class TableController extends ChangeNotifier {
       spot: spot,
       mix: heroMix!,
       score: heroScore!,
+      oneAction: oneAction,
     )..played = heroPlay);
     _notify();
   }
@@ -223,6 +224,25 @@ class TableController extends ChangeNotifier {
       if (roll < 0) return i;
     }
     return last;
+  }
+
+  /// Simple training: plays [choice] and grades it against GTO. Better plays
+  /// go ahead at once; after a mistake or a blunder, GTO's answer shows first
+  /// (then [continueHand]).
+  Future<void> playGraded(int choice) async {
+    final spot = heroSpot;
+    if (spot == null) return;
+    submitMix([for (var i = 0; i < spot.actions.length; i++) i == choice ? 1.0 : 0.0],
+        choice: choice, oneAction: true);
+    final grade = heroScore?.grade;
+    if (grade != null && grade.index < DecisionGrade.mistake.index) await continueHand();
+  }
+
+  /// Switches between simple and advanced training (from the next hand
+  /// during one).
+  void setAdvanced(bool value) {
+    session.setAdvanced(value);
+    _notify();
   }
 
   /// After scoring: plays the chosen (or drawn) action.
@@ -281,15 +301,6 @@ class TableController extends ChangeNotifier {
   void setStyle(int seat, BotStyle? style) {
     session.setStyle(seat, style);
     view.seats[seat].style = session.styles[seat];
-    _notify();
-  }
-
-  /// Gives every bot a new random style (Guess the GTO mode).
-  void shuffleStyles() {
-    session.shuffleStyles();
-    for (final (i, seat) in view.seats.indexed) {
-      seat.style = session.styles[i];
-    }
     _notify();
   }
 

@@ -17,7 +17,7 @@ class RangeScreen extends StatefulWidget {
 
   final TableSession session;
 
-  /// Show just this seat's range.
+  /// The seat whose range shows first (a dropdown picks another).
   final int? only;
 
   @override
@@ -34,16 +34,16 @@ class _RangeScreenState extends State<RangeScreen> {
     final hand = session.hand;
     final s = S.of(context);
     final only = widget.only;
+    // Everyone still in the hand (the user first), and the one clicked on.
     final seats = hand == null
         ? <int>[]
-        : only != null
-        ? [only]
         : [
             for (var s = 0; s < hand.playerCount; s++)
-              if (s != TableSession.heroSeat && !hand.isFolded(s)) s,
-            TableSession.heroSeat,
+              if (s == TableSession.heroSeat || s == only || !hand.isFolded(s)) s,
           ];
-    final seat = seats.contains(_seat) ? _seat! : (seats.isEmpty ? null : seats.first);
+    final seat = seats.contains(_seat)
+        ? _seat!
+        : (seats.contains(only) ? only! : (seats.isEmpty ? null : seats.first));
     String name(int seat) => seat == TableSession.heroSeat ? s.you : session.players[seat].name;
 
     final range = seat == null ? null : session.rangeOf(seat);
@@ -53,13 +53,7 @@ class _RangeScreenState extends State<RangeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          only == null
-              ? s.ranges
-              : only == TableSession.heroSeat
-              ? s.yourRange
-              : name(only),
-        ),
+        title: Text(s.ranges),
         actions: const [
           HelpButton(section: GlossarySection.strategy, terms: [GlossaryTerm.range, GlossaryTerm.rangeGrid]),
         ],
@@ -70,13 +64,26 @@ class _RangeScreenState extends State<RangeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // On top: the range / frequency toggle, and whose range (when showing everyone's).
+              // On top: whose range, and the frequency / share toggle.
               Wrap(
                 spacing: 12,
                 runSpacing: 8,
                 alignment: WrapAlignment.center,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
+                  if (seat != null)
+                    DropdownButton<int>(
+                      key: const ValueKey('range player'),
+                      value: seat,
+                      items: [
+                        for (final other in seats)
+                          DropdownMenuItem(
+                            value: other,
+                            child: Text('${name(other)} · ${hand!.positionOf(other).label}'),
+                          ),
+                      ],
+                      onChanged: (other) => setState(() => _seat = other),
+                    ),
                   SegmentedButton<bool>(
                     segments: [
                       ButtonSegment(value: false, label: Text(s.frequency)),
@@ -86,13 +93,6 @@ class _RangeScreenState extends State<RangeScreen> {
                     showSelectedIcon: false,
                     onSelectionChanged: (v) => setState(() => _share = v.single),
                   ),
-                  if (only == null && seats.length > 1)
-                    for (final other in seats)
-                      ChoiceChip(
-                        label: Text(name(other)),
-                        selected: other == seat,
-                        onSelected: (_) => setState(() => _seat = other),
-                      ),
                 ],
               ),
               const SizedBox(height: 8),

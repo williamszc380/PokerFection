@@ -142,7 +142,9 @@ void main() {
           expect([for (final a in spot.actions) a.kind], [
             SpotActionKind.fold,
             legal.canCheck ? SpotActionKind.check : SpotActionKind.call,
-            for (final _ in multiples) SpotActionKind.raise,
+            // Sizes bigger than the stack are left out.
+            for (final m in multiples)
+              if (PreflopTree.raiseSize(legal.currentBet, m) < legal.maxRaiseTo) SpotActionKind.raise,
             SpotActionKind.allIn,
           ]);
           expect(spot.frequencies.reduce((a, b) => a + b), closeTo(1, 1e-9));

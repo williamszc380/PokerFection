@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../engine/events.dart';
 import '../gto/spot_strategy.dart';
 import 'format.dart';
 import '../l10n/strings.dart';
@@ -91,7 +92,16 @@ class DecisionPanelState extends State<DecisionPanel> {
   bool get _showingGto =>
       _gtoTop != null && listEquals(_top, _gtoTop) && listEquals(_sizes, _gtoSizes);
 
+  /// There is a GTO answer for this decision (GTO Training).
   bool get _training => _c.heroSpot != null;
+
+  /// Advanced training: the user sets percentages and gets a score.
+  bool get _percentages => _training && _c.session.advanced;
+
+  /// Show GTO was pressed for this decision: each choice's EV loss shows
+  /// (and in simple training GTO's percentages, which advanced training
+  /// fills in).
+  bool _gtoShown = false;
 
   void _reset(List<SpotAction> menu) {
     _menu = menu;
@@ -102,7 +112,8 @@ class DecisionPanelState extends State<DecisionPanel> {
     _choice = null;
     // With percentages to set, the action played is drawn from them (RNG)
     // unless the user ticks one.
-    _draw = _training;
+    _draw = _percentages;
+    _gtoShown = false;
     _gtoTop = null;
     _gtoSizes = null;
   }
@@ -122,7 +133,7 @@ class DecisionPanelState extends State<DecisionPanel> {
   int get _played {
     final choice = _choice;
     if (choice != null) return choice;
-    if (!_training) return _rows.passive;
+    if (!_percentages) return _rows.passive;
     final mix = _mix();
     var best = _rows.passive;
     for (var i = 0; i < mix.length; i++) {
@@ -135,8 +146,10 @@ class DecisionPanelState extends State<DecisionPanel> {
   void submit() {
     final menu = _menu;
     if (menu == null || _c.heroScore != null) return;
-    if (_training) {
+    if (_percentages) {
       _c.submitMix(_mix(), choice: _draw ? null : _played);
+    } else if (_training) {
+      _c.playGraded(_played);
     } else {
       _c.heroAct(menu[_played].action);
     }
@@ -172,6 +185,7 @@ class DecisionPanelState extends State<DecisionPanel> {
     if (raises.any((r) => r > 0)) _sizes = splitWhole(raises, 100);
     _gtoTop = List.of(_top);
     _gtoSizes = List.of(_sizes);
+    _gtoShown = true;
   });
 
   void _tick(int index) => setState(() {
@@ -242,6 +256,12 @@ class DecisionPanelState extends State<DecisionPanel> {
     final noAnswer = _c.guessGto && !training
         ? s.noAnswer(_c.session.preflop?.unavailable ?? _c.session.postflop?.unavailable)
         : null;
+    // With more than two players after the flop, GTO's answer is approximate.
+    final hand = _c.session.hand;
+    final approximate = training &&
+        hand != null &&
+        hand.street != Street.preflop &&
+        (_c.session.postflop?.approximate ?? false);
     // Only what the table doesn't already show: the pot odds when facing a bet.
     final potOdds = options == null || !options.canCall
         ? null
@@ -257,8 +277,10 @@ class DecisionPanelState extends State<DecisionPanel> {
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(noAnswer, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFFFFCC80))),
           ),
+        if (approximate)
+          Text(s.approxMultiway, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFFFFCC80))),
         if (potOdds != null) Text(potOdds, style: muted, maxLines: 1, overflow: TextOverflow.ellipsis),
-        if (training)
+        if (_percentages)
           MixSlider(
             colors: [for (final i in _rows.allowed) actionColor(menu, i)],
             shares: [for (final i in _rows.allowed) mix[i] * 100],
@@ -266,12 +288,17 @@ class DecisionPanelState extends State<DecisionPanel> {
             upper: _rows.allowed.indexOf(_rows.passive) + 1,
             onChanged: _setShares,
           ),
+        // Simple training, after Show GTO: GTO's mix.
+        if (training && !_percentages && _gtoShown) ...[
+          const SizedBox(height: 4),
+          MixBar(actions: menu, frequencies: _c.heroSpot!.frequencies),
+        ],
         const SizedBox(height: 4),
         Expanded(child: LayoutBuilder(builder: _choices)),
         const SizedBox(height: 6),
         Row(
           children: [
-            if (training) ...[
+            if (_percentages) ...[
               _SquareTick(
                 selected: _draw,
                 onTap: () => setState(() => _draw = true),
@@ -279,9 +306,13 @@ class DecisionPanelState extends State<DecisionPanel> {
               const SizedBox(width: 6),
               Text(s.randomize),
               const SizedBox(width: 12),
+            ],
+            if (training) ...[
               OutlinedButton.icon(
                 key: const ValueKey('show gto'),
-                onPressed: _showingGto ? null : _reveal,
+                onPressed: _percentages
+                    ? (_showingGto ? null : _reveal)
+                    : (_gtoShown ? null : () => setState(() => _gtoShown = true)),
                 icon: const Icon(Icons.visibility, size: 18),
                 label: Text(s.showGto),
                 style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
@@ -311,6 +342,18 @@ class DecisionPanelState extends State<DecisionPanel> {
     final menu = _rows.menu;
     final played = _played;
     final passiveLabel = spotActionLabel(s, menu[_rows.passive]);
+    // After Show GTO: each choice's EV loss, and (simple training) GTO's percentages.
+    final spot = _training && _gtoShown ? _c.heroSpot : null;
+    final gto = spot != null && !_percentages ? spot.frequencies : null;
+    double? gtoOf(Iterable<int> actions) => gto == null ? null : actions.fold<double>(0, (sum, i) => sum + gto[i]);
+    final evs = [for (final ev in spot?.evs ?? const <double>[]) if (!ev.isNaN) ev];
+    final bestEv = evs.isEmpty ? null : evs.reduce(max);
+    // What the best of [actions] gives up against the best choice ("–" if none is allowed).
+    String? lossOf(Iterable<int> actions) {
+      if (spot == null || bestEv == null) return null;
+      final own = [for (final i in actions) if (!spot.evs[i].isNaN) spot.evs[i]];
+      return own.isEmpty ? '–' : (bestEv - own.reduce(max)).toStringAsFixed(2);
+    }
     // Room for the longest name (and its dot); the sliders get the rest.
     final nameWidth = _textWidth(context, [
           s.fold,
@@ -330,6 +373,8 @@ class DecisionPanelState extends State<DecisionPanel> {
         reason: _reason(s, menu[_rows.fold].unavailable),
         ticked: !_draw && played == _rows.fold,
         onTick: () => _tick(_rows.fold),
+        gto: gtoOf([_rows.fold]),
+        evLoss: lossOf([_rows.fold]),
         percent: _top[0],
         onPercent: (v) => _setTop(0, v),
       ),
@@ -340,6 +385,8 @@ class DecisionPanelState extends State<DecisionPanel> {
         color: actionColor(menu, _rows.passive),
         ticked: !_draw && played == _rows.passive,
         onTick: () => _tick(_rows.passive),
+        gto: gtoOf([_rows.passive]),
+        evLoss: lossOf([_rows.passive]),
         percent: _top[1],
         onPercent: (v) => _setTop(1, v),
       ),
@@ -351,6 +398,8 @@ class DecisionPanelState extends State<DecisionPanel> {
         reason: _rows.canRaise ? null : s.unavailable(Unavailable.raisingNotAllowed),
         ticked: !_draw && _rows.sizes.contains(played),
         onTick: _tickRaise,
+        gto: gtoOf(_rows.sizes),
+        evLoss: lossOf(_rows.sizes),
         percent: _top[2],
         onPercent: (v) => _setTop(2, v),
       ),
@@ -365,6 +414,8 @@ class DecisionPanelState extends State<DecisionPanel> {
           reason: _reason(s, menu[i].unavailable),
           ticked: !_draw && played == i,
           onTick: () => _tick(i),
+          gto: gtoOf([i]),
+          evLoss: lossOf([i]),
           percent: menu[i].available ? _sizes[_rows.sizes.indexOf(i)] : 0,
           onPercent: _top[2] > 0 && menu[i].available
               ? (v) => setState(() => _sizes = rebalancePercents(_sizes, _rows.sizes.indexOf(i), v))
@@ -372,10 +423,29 @@ class DecisionPanelState extends State<DecisionPanel> {
         ),
     ];
 
+    final muted = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60);
     return SingleChildScrollView(
-      child: Column(children: [...first, const Divider(height: 10), ...sizes]),
+      child: Column(
+        children: [
+          // After Show GTO: what the extra columns are.
+          if (spot != null)
+            Row(
+              children: [
+                const Spacer(),
+                if (gto != null)
+                  SizedBox(width: _percentWidth, child: Text(s.columnGto, textAlign: TextAlign.right, style: muted)),
+                SizedBox(width: _evWidth, child: Text(s.columnEvLoss, textAlign: TextAlign.right, style: muted)),
+              ],
+            ),
+          ...first,
+          const Divider(height: 10),
+          ...sizes,
+        ],
+      ),
     );
   }
+
+  static const _evWidth = 64.0;
 
   /// How wide the widest of [labels] is in the rows' text style.
   static double _textWidth(BuildContext context, List<String> labels) {
@@ -414,6 +484,8 @@ class DecisionPanelState extends State<DecisionPanel> {
     required VoidCallback onTick,
     required int percent,
     required ValueChanged<int>? onPercent,
+    double? gto,
+    String? evLoss,
   }) {
     final enabled = reason == null;
     final dim = enabled ? null : Colors.white38;
@@ -436,11 +508,20 @@ class DecisionPanelState extends State<DecisionPanel> {
         children: [
           _SquareTick(key: key, selected: enabled && ticked, onTap: enabled ? onTick : null),
           const SizedBox(width: 6),
-          if (!_training)
+          if (!_percentages) ...[
             Expanded(
               child: InkWell(onTap: enabled ? onTick : null, child: name),
-            )
-          else ...[
+            ),
+            if (gto != null)
+              SizedBox(
+                width: _percentWidth,
+                child: Text(
+                  enabled ? '${(gto * 100).round()}%' : '–',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(color: Colors.white60),
+                ),
+              ),
+          ] else ...[
             SizedBox(width: nameWidth, child: name),
             Expanded(
               child: SliderTheme(
@@ -467,6 +548,18 @@ class DecisionPanelState extends State<DecisionPanel> {
               ),
             ),
           ],
+          // After Show GTO: what this choice gives up against the best one (the best in green).
+          if (evLoss != null)
+            SizedBox(
+              width: _evWidth,
+              child: Text(
+                enabled ? evLoss : '–',
+                textAlign: TextAlign.right,
+                style: evLoss == '0.00' && enabled
+                    ? const TextStyle(color: Color(0xFF81C784), fontWeight: FontWeight.w700)
+                    : const TextStyle(color: Colors.white60),
+              ),
+            ),
         ],
       ),
     );
@@ -488,7 +581,8 @@ class DecisionPanelState extends State<DecisionPanel> {
           children: [
             GradeChip(grade: score.grade),
             const SizedBox(width: 10),
-            Text(s.score(score.score), style: theme.textTheme.titleMedium),
+            // Simple training scores the one action played.
+            Text(s.score(_c.session.advanced ? score.score : score.playScore), style: theme.textTheme.titleMedium),
             const HelpButton(section: GlossarySection.scoring),
           ],
         ),
@@ -501,7 +595,9 @@ class DecisionPanelState extends State<DecisionPanel> {
             style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
         Text(
-          s.evLossAndMatch('${score.evLoss.toStringAsFixed(2)} BB', (score.mixMatch * 100).round()),
+          _c.session.advanced
+              ? s.evLossAndMatch('${score.evLoss.toStringAsFixed(2)} BB', (score.mixMatch * 100).round())
+              : '${s.evLoss} ${score.evLoss.toStringAsFixed(2)} BB',
           style: muted,
         ),
         const SizedBox(height: 6),

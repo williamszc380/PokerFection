@@ -10,6 +10,8 @@ import 'package:pokerfection/src/gto/preflop/preflop_equity.dart';
 import 'package:pokerfection/src/gto/gto_solutions.dart';
 import 'package:pokerfection/src/ui/table_controller.dart';
 import 'package:pokerfection/src/ui/charts_screen.dart';
+import 'package:pokerfection/src/ui/history_screen.dart';
+import 'package:pokerfection/src/ui/range_screen.dart';
 import 'package:pokerfection/src/ui/table_screen.dart';
 import 'package:pokerfection/src/ui/widgets/card_view.dart';
 import 'package:pokerfection/src/ui/widgets/logo.dart';
@@ -95,7 +97,7 @@ void main() {
     setScreen(tester, const Size(1280, 900));
     await tester.pumpWidget(MaterialApp(
       home: TableScreen(
-        config: TableConfig.quick(playerCount: 3, stackBb: 20, guessGto: true),
+        config: TableConfig.quick(playerCount: 3, stackBb: 20, guessGto: true, advanced: true),
         speed: PlaybackSpeed.instant,
         solutions: testSolutions(),
       ),
@@ -123,6 +125,104 @@ void main() {
     }
     expect(scored, greaterThan(0));
     expect(find.text('Avg'), findsOneWidget);
+  });
+
+  testWidgets('simple training: just play, GTO shows after mistakes, each play is scored', (tester) async {
+    setScreen(tester, const Size(1280, 900));
+    await tester.pumpWidget(MaterialApp(
+      home: TableScreen(
+        config: TableConfig.quick(playerCount: 2, stackBb: 20, guessGto: true),
+        speed: PlaybackSpeed.instant,
+        solutions: testSolutions(),
+      ),
+    ));
+    var decisions = 0, shown = 0;
+    for (var hand = 0; hand < 6; hand++) {
+      for (var step = 0; step < 40; step++) {
+        await tester.pumpAndSettle();
+        if (find.text('Next Hand').evaluate().isNotEmpty) break;
+        expect(find.byType(Slider), findsNothing, reason: 'no percentages to set');
+        final cont = find.byKey(const ValueKey('continue'));
+        if (cont.evaluate().isNotEmpty) {
+          // A mistake or blunder: GTO's answer, with the play's grade and score.
+          shown++;
+          expect(find.text('Mistake').evaluate().isNotEmpty || find.text('Blunder').evaluate().isNotEmpty, isTrue);
+          expect(find.textContaining('Score '), findsOneWidget);
+          await tester.tap(cont);
+          continue;
+        }
+        // Folding every hand makes some mistakes.
+        if (await actIfAsked(tester, call: false)) decisions++;
+      }
+      await tester.tap(find.text('Next Hand'));
+    }
+    await tester.pumpAndSettle();
+    expect(decisions, greaterThan(0));
+    expect(shown, greaterThan(0));
+    // Each hand's score in the strip, and the average.
+    expect(find.text('Avg'), findsOneWidget);
+    expect(find.descendant(of: find.byType(RecentScores), matching: find.textContaining(RegExp(r'^\d+$'))), findsWidgets);
+    // Advanced from the next hand on, from the menu.
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Advanced'));
+    await tester.pumpAndSettle();
+    for (var step = 0; step < 40; step++) {
+      await tester.pumpAndSettle();
+      if (find.byType(Slider).evaluate().isNotEmpty) break;
+      final cont = find.byKey(const ValueKey('continue'));
+      if (cont.evaluate().isNotEmpty) {
+        await tester.tap(cont);
+      } else if (find.text('Next Hand').evaluate().isNotEmpty) {
+        await tester.tap(find.text('Next Hand'));
+      } else {
+        await actIfAsked(tester, call: true);
+      }
+    }
+    expect(find.byType(Slider), findsWidgets);
+  });
+
+  testWidgets('a click on a seat shows the range; the players are edited from the menu', (tester) async {
+    setScreen(tester, const Size(1280, 900));
+    await tester.pumpWidget(MaterialApp(
+      home: TableScreen(
+        config: TableConfig.quick(playerCount: 3, stackBb: 20, guessGto: true),
+        speed: PlaybackSpeed.instant,
+        solutions: testSolutions(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('seat1')));
+    await tester.pumpAndSettle();
+    expect(find.byType(RangeScreen), findsOneWidget);
+    // Another player's range, from the dropdown.
+    final picker = find.byKey(const ValueKey('range player'));
+    expect(find.descendant(of: picker, matching: find.textContaining('Alice')), findsOneWidget);
+    await tester.tap(picker);
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Player ·').last);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: picker, matching: find.textContaining('Player')), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Players'));
+    await tester.pumpAndSettle();
+    expect(find.text('Player'), findsWidgets);
+    // One show/hide cards button per opponent.
+    expect(find.byIcon(Icons.visibility_off), findsNWidgets(2));
+    await tester.tap(find.byIcon(Icons.visibility_off).first);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: find.byType(BottomSheet), matching: find.byIcon(Icons.visibility)), findsOneWidget);
+    // A new stack for the first opponent, from the next hand on.
+    await tester.tap(find.byIcon(Icons.savings_outlined).at(1));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '50');
+    await tester.pump();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('→ 50.00 BB'), findsOneWidget);
   });
 
   testWidgets("with the cards shown, a player who folds keeps theirs, dimmed", (tester) async {
@@ -167,19 +267,24 @@ void main() {
     setScreen(tester, const Size(1280, 900));
     await tester.pumpWidget(MaterialApp(
       home: TableScreen(
-        config: TableConfig.quick(playerCount: 2, stackBb: 20, guessGto: true),
+        config: TableConfig.quick(playerCount: 2, stackBb: 20, guessGto: true, advanced: true),
         speed: PlaybackSpeed.instant,
         solutions: testSolutions(),
       ),
     ));
     final show = find.byKey(const ValueKey('show gto'));
-    // Heads-up, the first decision is before the flop, always with a GTO answer.
+    // Heads-up, the user's first decision is before the flop, always with a
+    // GTO answer (unless the bot folds first: then the next hand).
     for (var step = 0; step < 40 && show.evaluate().isEmpty; step++) {
       await tester.pumpAndSettle();
+      if (find.text('Next Hand').evaluate().isNotEmpty) await tester.tap(find.text('Next Hand'));
     }
     await tester.tap(show);
     await tester.pumpAndSettle();
     expect(tester.widget<OutlinedButton>(show).onPressed, isNull, reason: "GTO's answer is showing");
+    // Each choice's EV loss shows too, the best one at 0.00.
+    expect(find.text('EV Loss'), findsOneWidget);
+    expect(find.text('0.00'), findsWidgets);
     // Changing the percentages makes it pressable again, to go back to GTO's answer.
     final sliders = find.byType(Slider);
     await tester.drag(sliders.at(1), const Offset(-60, 0));

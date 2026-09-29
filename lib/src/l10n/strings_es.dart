@@ -16,6 +16,23 @@ class StringsEs extends S {
   String get settings => 'Ajustes';
 
   @override
+  String get handRankings => 'Ranking de manos';
+  @override
+  String get royalFlush => 'Escalera real';
+  @override
+  String handCategory(HandCategory category) => switch (category) {
+        HandCategory.highCard => 'Carta alta',
+        HandCategory.pair => 'Pareja',
+        HandCategory.twoPair => 'Doble pareja',
+        HandCategory.trips => 'Trío',
+        HandCategory.straight => 'Escalera',
+        HandCategory.flush => 'Color',
+        HandCategory.fullHouse => 'Full',
+        HandCategory.quads => 'Póker',
+        HandCategory.straightFlush => 'Escalera de color',
+      };
+
+  @override
   String get preflopCharts => 'Tablas preflop';
   @override
   String get spot => 'Situación';
@@ -60,6 +77,10 @@ class StringsEs extends S {
   String get newGame => 'Nueva partida';
   @override
   String get training => 'Entrenamiento GTO';
+  @override
+  String get simple => 'Simple';
+  @override
+  String get advanced => 'Avanzado';
   @override
   String get freePlay => 'Juego libre';
   @override
@@ -139,8 +160,6 @@ class StringsEs extends S {
   @override
   String get shuffleStyles => 'Mezclar estilos de juego';
   @override
-  String get newStylesDealt => 'Nuevos estilos de juego aleatorios.';
-  @override
   String get mainMenu => 'Menú principal';
   @override
   String get showRange => 'Rango';
@@ -172,6 +191,8 @@ class StringsEs extends S {
   String potOdds(int percent) => 'Pot odds $percent%';
   @override
   String get showGto => 'Ver GTO';
+  @override
+  String get approxMultiway => 'Respuesta aproximada: bote multiway';
   @override
   String get randomize => 'RNG';
   @override
@@ -363,9 +384,11 @@ class StringsEs extends S {
 
   @override
   String definition(GlossaryTerm term) => switch (term) {
-        GlossaryTerm.training => 'En cada decisión, indica con qué frecuencia crees que GTO se retira, iguala o '
-            'sube (y cuánto), marca lo que vas a jugar y verás la respuesta GTO y tu puntuación. En el preflop los '
-            'bots juegan GTO, así tus situaciones vienen de un juego GTO; sus estilos cuentan después del flop.',
+        GlossaryTerm.training => 'Juega contra los bots y aprende de GTO. Simple: juega con normalidad; tras un '
+            'Error o un Error grave verás la respuesta GTO, y Ver GTO la muestra cuando quieras. Avanzado: en cada '
+            'decisión indica con qué frecuencia crees que GTO se retira, iguala o sube (y cuánto), y verás la '
+            'respuesta GTO y tu puntuación. Cámbialo en ☰, entre manos. En el preflop los bots juegan GTO; sus '
+            'estilos cuentan después del flop.',
         GlossaryTerm.play => 'Juega contra los bots sin puntuaciones, como en una partida real.',
         GlossaryTerm.utg => 'Under the gun: el primero en hablar antes del flop.',
         GlossaryTerm.utg1 => 'El asiento después de UTG.',
@@ -431,8 +454,10 @@ class StringsEs extends S {
             'si tu equity es mayor que esa proporción.',
         GlossaryTerm.evLoss => 'Cuántas BB pierden tus porcentajes frente a la mezcla de GTO. La columna Pérd. EV compara cada acción con la mejor.',
         GlossaryTerm.mixMatch => 'Cuánto se parecen tus porcentajes a los de GTO: 100% es idéntico.',
-        GlossaryTerm.score => 'De 0 a 100: la mitad por la coincidencia y la mitad por perder poco EV. Cuenta '
-            'cuánto te retiras, pasas o igualas, y subes; los tamaños de subida cuentan solo un 10%.',
+        GlossaryTerm.score => 'De 0 a 100. Simple: cada jugada vale 100, menos un punto por cada 0,01 BB que '
+            'pierde. Avanzado: la mitad por la coincidencia y la mitad por perder poco EV; cuenta cuánto te '
+            'retiras, pasas o igualas, y subes, y los tamaños de subida cuentan solo un 10%. En el historial, un '
+            'borde blanco marca las manos en Avanzado.',
         GlossaryTerm.grades => 'Según la pérdida de EV (los tamaños de subida cuentan un 10%): Óptimo (hasta 0,02 BB), Bueno (0,08), Imprecisión (0,25), '
             'Error (0,75), Error grave (más).',
         GlossaryTerm.noLimit => 'Las apuestas que se usan aquí: puedes apostar o subir cualquier cantidad, hasta '

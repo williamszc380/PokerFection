@@ -3,12 +3,13 @@ import 'package:flutter/material.dart';
 import '../app/app_settings.dart';
 import '../l10n/strings.dart';
 import 'charts_screen.dart';
+import 'hand_rankings_screen.dart';
 import 'settings_screen.dart';
 import 'setup_screen.dart';
 import 'widgets/logo.dart';
 
-/// The first screen: the logo, Play, Preflop Charts and Settings, with the
-/// language in the top corner.
+/// The first screen: the logo, Play, Preflop Charts, Hand Rankings and
+/// Settings, with the language in the top corner.
 class MainMenu extends StatelessWidget {
   const MainMenu({super.key});
 
@@ -35,6 +36,13 @@ class MainMenu extends StatelessWidget {
           onPressed: () => open(const ChartsScreen()),
           icon: const Icon(Icons.grid_view),
           label: Text(s.preflopCharts),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => open(const HandRankingsScreen()),
+          icon: const Icon(Icons.format_list_numbered),
+          label: Text(s.handRankings),
           style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
         ),
         const SizedBox(height: 12),

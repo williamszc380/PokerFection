@@ -47,6 +47,7 @@ class TableConfig {
     this.ante = 0,
     this.resetStacksEachHand = false,
     this.guessGto = false,
+    this.advanced = false,
     this.showStyles = false,
     this.showHands = false,
     this.raiseRule = RaiseRule.standard,
@@ -64,6 +65,7 @@ class TableConfig {
     int ante = 0,
     bool resetStacksEachHand = false,
     bool guessGto = false,
+    bool advanced = false,
     bool showStyles = false,
     bool showHands = false,
     RaiseRule raiseRule = RaiseRule.standard,
@@ -74,6 +76,7 @@ class TableConfig {
         ante: ante,
         resetStacksEachHand: resetStacksEachHand,
         guessGto: guessGto,
+        advanced: advanced,
         showStyles: showStyles,
         showHands: showHands,
         raiseRule: raiseRule,
@@ -107,8 +110,13 @@ class TableConfig {
   final int ante;
   final bool resetStacksEachHand;
 
-  /// Ask the user for their strategy and score it against GTO.
+  /// Grade the user's play against GTO (GTO Training).
   final bool guessGto;
+
+  /// Advanced training: at every decision the user sets how often GTO takes
+  /// each action and gets a score. Simple training (the default): they just
+  /// play, and GTO's answer shows after a mistake or a blunder.
+  final bool advanced;
 
   /// Training aids, only available in Guess the GTO mode: show each bot's
   /// style, and show their cards face up during the hand.
@@ -179,12 +187,6 @@ class TableSession {
 
   BotStyle _randomStyle() => BotStyle.humanLike[_random.nextInt(BotStyle.humanLike.length)];
 
-  /// Gives every bot a new random human-like style (from the next decision on).
-  void shuffleStyles() {
-    styles = [for (final s in styles) s == null ? null : _randomStyle()];
-    _bots = [for (final s in styles) s == null ? null : Bot(s, _random)];
-  }
-
   /// Changes one bot's style; null gives it a random style kept secret.
   void setStyle(int seat, BotStyle? style) {
     if (seat == heroSeat) return;
@@ -219,6 +221,41 @@ class TableSession {
 
   /// Stacks at the start of the next hand.
   late List<int> stacks;
+
+  /// Advanced training in the current hand (see [TableConfig.advanced]).
+  late bool advanced = config.advanced;
+  bool? _nextAdvanced;
+
+  /// The level the next hand will use.
+  bool get advancedNext => _nextAdvanced ?? advanced;
+
+  /// Switches between simple and advanced training: now between hands, or
+  /// from the next hand during one.
+  void setAdvanced(bool value) {
+    final h = hand;
+    if (h != null && !h.isOver) {
+      _nextAdvanced = value;
+    } else {
+      advanced = value;
+      _nextAdvanced = null;
+    }
+  }
+
+  /// Stacks the user set during the game (chips, by seat), for the next
+  /// hand; cleared once it is dealt.
+  final Map<int, int> stackEdits = {};
+
+  /// Stacks the user set, which also become those players' stacks whenever
+  /// stacks are reset (every hand, or after going broke).
+  final Map<int, int> _startingStacks = {};
+
+  int _startingStackOf(int seat) => _startingStacks[seat] ?? config.stackOf(seat);
+
+  /// Gives [seat] a stack of [chips] from the next hand on.
+  void setStack(int seat, int chips) {
+    stackEdits[seat] = chips;
+    _startingStacks[seat] = chips;
+  }
   PokerHand? hand;
   int handNumber = 0;
   int _button = 0;
@@ -235,8 +272,8 @@ class TableSession {
   /// Every hand of the session, with the user's scored decisions (Guess the GTO mode).
   final List<HandRecord> history = [];
 
-  /// All scored decisions so far.
-  Iterable<DecisionScore> get scores => history.expand((h) => h.decisions).map((d) => d.score);
+  /// The score (0-100) of every decision so far.
+  Iterable<int> get points => history.expand((h) => h.decisions).map((d) => d.points);
 
   /// Solved games are needed to score the user or to run GTO bots.
   bool get needsSolver => config.guessGto || hasGtoBots;
@@ -252,9 +289,12 @@ class TableSession {
     final h = hand;
     final now = h != null && h.isOver ? [for (var seat = 0; seat < n; seat++) h.stackOf(seat)] : stacks;
     final nextStacks = config.resetStacksEachHand
-        ? [for (var seat = 0; seat < n; seat++) config.stackOf(seat)]
+        ? [for (var seat = 0; seat < n; seat++) _startingStackOf(seat)]
         // Anyone who went broke buys back in.
-        : [for (var seat = 0; seat < n; seat++) now[seat] == 0 ? config.stackOf(seat) : now[seat]];
+        : [for (var seat = 0; seat < n; seat++) now[seat] == 0 ? _startingStackOf(seat) : now[seat]];
+    for (final MapEntry(key: seat, value: chips) in stackEdits.entries) {
+      nextStacks[seat] = chips;
+    }
     final position = config.heroPosition;
     final button = position != null
         ? buttonSeatFor(n, heroSeat, position)
@@ -298,6 +338,9 @@ class TableSession {
     if (hand != null) finishHand();
     final next = upcoming;
     stacks = next.stacks;
+    stackEdits.clear();
+    advanced = advancedNext;
+    _nextAdvanced = null;
     _button = next.button;
     handNumber++;
     _recorded = false;
@@ -315,6 +358,7 @@ class TableSession {
       handNumber: handNumber,
       holeCards: h.holeCards(heroSeat),
       position: h.positionOf(heroSeat),
+      advanced: advanced,
     ));
     final blueprint = currentAdvisor, subgames = solveSubgame, streets = solvePostflop;
     final tracker = preflop = needsSolver && blueprint != null && subgames != null

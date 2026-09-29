@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../app/app_settings.dart';
 import '../bots/bot.dart';
 import '../engine/actions.dart';
+import '../engine/poker_hand.dart';
 import '../game/table_session.dart';
 import '../gto/gto_solutions.dart';
 import 'decision_panel.dart';
@@ -69,57 +70,128 @@ class _TableScreenState extends State<TableScreen> {
     _controller.heroAct(options.canCheck ? const PlayerAction.check() : const PlayerAction.call());
   }
 
-  /// A player's options (Guess the GTO mode): range, and for bots their
-  /// style and whether their cards are shown.
-  Future<void> _seatMenu(BuildContext context, int seat) async {
+  /// A click on a seat (Guess the GTO mode): that player's range.
+  void _openRange(BuildContext context, int seat) {
     final session = _controller.session;
-    final isHero = seat == TableSession.heroSeat;
-    final hand = session.hand;
+    if (session.hand == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => RangeScreen(session: session, only: seat)),
+    );
+  }
+
+  /// Everyone at the table (from ☰): stacks, and for bots their style and
+  /// whether their cards are shown. Ranges open with a click on a seat.
+  Future<void> _players(BuildContext context) async {
+    final session = _controller.session;
     final s = S.of(context);
-    final choice = await showModalBottomSheet<String>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            ListTile(
-              title: Text(isHero ? s.you : session.players[seat].name),
-              subtitle: Text(hand == null ? '' : hand.positionOf(seat).label),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final hand = session.hand;
+          return SafeArea(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                ListTile(
+                  title: Text(s.players, style: Theme.of(context).textTheme.titleMedium),
+                  trailing: const HelpButton(section: GlossarySection.styles),
+                ),
+                for (var seat = 0; seat < session.config.playerCount; seat++)
+                  _playerRow(context, s, seat, hand, () => setSheetState(() {})),
+              ],
             ),
-            ListTile(
-              leading: const Icon(Icons.grid_view),
-              title: Text(isHero ? s.yourRange : s.showRange),
-              enabled: hand != null,
-              onTap: () => Navigator.of(context).pop('range'),
-            ),
-            if (!isHero) ...[
-              ListTile(
-                leading: const Icon(Icons.psychology_alt_outlined),
-                title: Text(s.changeStyle),
-                trailing: Text(session.hiddenStyles[seat] ? '' : s.style(session.styles[seat]!)),
-                onTap: () => Navigator.of(context).pop('style'),
-              ),
-              ListTile(
-                leading: Icon(session.revealedSeats.contains(seat) ? Icons.visibility_off : Icons.visibility),
-                title: Text(session.revealedSeats.contains(seat) ? s.hideTheirCards : s.showTheirCards),
-                onTap: () => Navigator.of(context).pop('cards'),
-              ),
-            ],
-          ],
-        ),
+          );
+        },
       ),
     );
-    if (!context.mounted) return;
-    switch (choice) {
-      case 'range':
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => RangeScreen(session: session, only: seat)),
-        );
-      case 'style':
-        await _pickStyle(context, seat);
-      case 'cards':
-        _controller.toggleCards(seat);
-    }
+  }
+
+  Widget _playerRow(BuildContext context, S s, int seat, PokerHand? hand, VoidCallback changed) {
+    final session = _controller.session;
+    final isHero = seat == TableSession.heroSeat;
+    final shown = session.revealedSeats.contains(seat);
+    return ListTile(
+      leading: SizedBox(
+        width: 52,
+        child: Text(hand == null ? '' : hand.positionOf(seat).label, style: const TextStyle(color: Colors.white60)),
+      ),
+      title: Text(isHero ? s.you : session.players[seat].name),
+      // The stack (a new one from the next hand on), and a bot's style, which a click changes.
+      subtitle: Text([
+        formatBb(hand?.stackOf(seat) ?? session.stacks[seat], unit: true) +
+            (session.stackEdits.containsKey(seat)
+                ? ' → ${formatBb(session.stackEdits[seat]!, unit: true)} (${s.nextHand})'
+                : ''),
+        if (!isHero) session.hiddenStyles[seat] ? s.random : s.style(session.styles[seat]!),
+      ].join(' · ')),
+      onTap: isHero
+          ? null
+          : () async {
+              await _pickStyle(context, seat);
+              changed();
+            },
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!isHero)
+            IconButton(
+              icon: Icon(shown ? Icons.visibility : Icons.visibility_off),
+              onPressed: () {
+                _controller.toggleCards(seat);
+                changed();
+              },
+            ),
+          IconButton(
+            icon: const Icon(Icons.savings_outlined),
+            onPressed: () async {
+              await _editStack(context, seat);
+              changed();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Asks for [seat]'s stack (in BB) for the next hand.
+  Future<void> _editStack(BuildContext context, int seat) async {
+    final session = _controller.session;
+    final s = S.of(context);
+    final text = TextEditingController(
+      text: formatBb(session.stackEdits[seat] ?? session.hand?.stackOf(seat) ?? session.stacks[seat]),
+    );
+    final bb = await showDialog<double>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final value = double.tryParse(text.text.trim().replaceAll(',', '.'));
+          final valid = value != null && value >= 1 && value <= 10000;
+          void done() {
+            if (valid) Navigator.of(context).pop(value);
+          }
+
+          return AlertDialog(
+            title: Text(
+                '${seat == TableSession.heroSeat ? s.you : session.players[seat].name} · ${s.stack}'),
+            content: TextField(
+              controller: text,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(suffixText: 'BB', helperText: s.nextHand),
+              onChanged: (_) => setDialogState(() {}),
+              onSubmitted: (_) => done(),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(s.cancel)),
+              FilledButton(onPressed: valid ? done : null, child: Text(s.ok)),
+            ],
+          );
+        },
+      ),
+    );
+    if (bb == null) return;
+    session.setStack(seat, (bb * TableConfig.bigBlind).round());
   }
 
   /// Lets the user change one bot's style (Guess the GTO mode).
@@ -162,15 +234,12 @@ class _TableScreenState extends State<TableScreen> {
         switch (choice) {
           case 'cards':
             _controller.toggleAllCards();
-          case 'ranges':
-            Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RangeScreen(session: session)));
+          case 'players':
+            _players(context);
+          case 'advanced':
+            _controller.setAdvanced(!session.advancedNext);
           case 'history':
             Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => HistoryScreen(session: session)));
-          case 'shuffle':
-            _controller.shuffleStyles();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(s.newStylesDealt)),
-            );
           case 'glossary':
             Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const GlossaryScreen()));
           case 'leave':
@@ -189,9 +258,14 @@ class _TableScreenState extends State<TableScreen> {
           if (training) ...[
             item('cards', _controller.allCardsShown ? Icons.visibility_off : Icons.visibility,
                 _controller.allCardsShown ? s.hideAllCards : s.showAllCards),
-            item('ranges', Icons.grid_view, s.ranges, enabled: session.hand != null),
+            // Simple or advanced training, from the next hand when changed during one.
+            CheckedPopupMenuItem<String>(
+              value: 'advanced',
+              checked: session.advancedNext,
+              child: Text(s.advanced),
+            ),
+            item('players', Icons.people_outline, s.players),
             item('history', Icons.history, s.history),
-            item('shuffle', Icons.shuffle, s.shuffleStyles),
             const PopupMenuDivider(),
           ],
           item('glossary', Icons.help_outline, s.glossary),
@@ -268,7 +342,7 @@ class _TableScreenState extends State<TableScreen> {
                     builder: (context, area) => _TableArea(
                       controller: _controller,
                       geometry: TableGeometry(area.biggest, _controller.playerCount),
-                      onSeatMenu: session.config.guessGto ? (seat) => _seatMenu(context, seat) : null,
+                      onSeatTap: session.config.guessGto ? (seat) => _openRange(context, seat) : null,
                     ),
                   );
                   final panel = DecisionPanel(key: _panel, controller: _controller);
@@ -309,13 +383,13 @@ Widget _centeredAt(Offset point, Widget child, {Key? key}) => Positioned(
     );
 
 class _TableArea extends StatelessWidget {
-  const _TableArea({required this.controller, required this.geometry, this.onSeatMenu});
+  const _TableArea({required this.controller, required this.geometry, this.onSeatTap});
 
   final TableController controller;
   final TableGeometry geometry;
 
   /// Opens a seat's options (Guess the GTO mode).
-  final ValueChanged<int>? onSeatMenu;
+  final ValueChanged<int>? onSeatTap;
 
   @override
   Widget build(BuildContext context) {
@@ -359,7 +433,7 @@ class _TableArea extends StatelessWidget {
             left: g.seat(i).dx - seatSize.width / 2,
             top: g.seat(i).dy - g.seatBoxSize.height / 2 - g.seatCardsAbove,
             child: _Hoverable(
-              onTap: onSeatMenu == null ? null : () => onSeatMenu!(i),
+              onTap: onSeatTap == null ? null : () => onSeatTap!(i),
               builder: (hovered) => SeatWidget(
                 seat: seat,
                 geometry: g,

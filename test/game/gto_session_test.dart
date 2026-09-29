@@ -7,9 +7,11 @@ import 'package:pokerfection/src/bots/bot.dart';
 import 'package:pokerfection/src/engine/actions.dart';
 import 'package:pokerfection/src/engine/events.dart';
 import 'package:pokerfection/src/game/table_session.dart';
+import 'package:pokerfection/src/engine/cards.dart';
+import 'package:pokerfection/src/gto/combos.dart';
 import 'package:pokerfection/src/gto/gto_solutions.dart';
+import 'package:pokerfection/src/gto/postflop/postflop_solver.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_equity.dart';
-import 'package:pokerfection/src/gto/spot_strategy.dart';
 
 void main() {
   final equity =
@@ -96,7 +98,7 @@ void main() {
     expect(answered, asked);
   });
 
-  test('pots with three players after the flop say there is no answer', () async {
+  test('pots with three players after the flop get an approximate answer', () async {
     final solutions = GtoSolutions(
       iterations: 30,
       postflopIterations: 4,
@@ -111,11 +113,103 @@ void main() {
     );
     session.advisor = await solutions.solve(session.upcomingSpec);
     final hand = session.startHand();
-    // Everyone just calls or checks to see a three-way flop.
+    // A line the preflop game has: the first player opens to 2.5 BB, both
+    // others call, and three see the flop.
     while (hand.street == Street.preflop) {
-      hand.act(hand.legalActions().canCheck ? const PlayerAction.check() : const PlayerAction.call());
+      final opened = hand.log.any((e) => e is ActionTaken && (e.kind == ActionKind.raise || e.kind == ActionKind.bet));
+      hand.act(opened ? const PlayerAction.call() : const PlayerAction.raiseTo(250));
       await session.afterAction();
     }
-    expect(session.postflop!.unavailable, NoAnswer.multiway);
+    expect([for (var s = 0; s < 3; s++) hand.isFolded(s)], [false, false, false]);
+    // The user against the field.
+    expect(session.postflop!.unavailable, isNull);
+    expect(session.postflop!.approximate, isTrue);
+    // Play it out: every decision of the user's while the field is followed
+    // gets an answer, and everyone's range can be shown.
+    var answered = 0;
+    while (!hand.isOver) {
+      await session.postflop!.ready;
+      final PlayerAction action;
+      if (session.isHeroTurn) {
+        final spot = session.heroSpot();
+        if (session.postflop!.unavailable == null) {
+          expect(spot, isNotNull, reason: '${hand.street}');
+          for (var seat = 0; seat < 3; seat++) {
+            if (!hand.isFolded(seat)) expect(session.rangeOf(seat), isNotNull, reason: 'seat $seat');
+          }
+        }
+        if (spot != null) answered++;
+        // Check or call, to see more streets.
+        action = hand.legalActions().canCheck ? const PlayerAction.check() : const PlayerAction.call();
+      } else {
+        action = session.botDecision();
+      }
+      hand.act(action);
+      await session.afterAction();
+    }
+    expect(answered, greaterThan(0));
+  });
+
+  test('multiway hands play through, with well-formed answers against the field', () async {
+    final solutions = GtoSolutions(
+      iterations: 30,
+      postflopIterations: 4,
+      inBackground: false,
+      loadEquity: () async => equity,
+    );
+    final rng = Random(8);
+    final session = TableSession(
+      TableConfig.quick(playerCount: 4, stackBb: 50, guessGto: true, opponentStyle: BotStyle.station),
+      random: rng,
+      solvePostflop: solutions.solvePostflop,
+      solveSubgame: solutions.solveSubgame,
+    );
+    var answered = 0;
+    for (var i = 0; i < 8; i++) {
+      session.advisor = await solutions.solve(session.upcomingSpec);
+      final hand = session.startHand();
+      await session.afterAction();
+      while (!hand.isOver) {
+        await session.preflopReady;
+        await session.postflop?.ready;
+        final PlayerAction action;
+        if (session.isHeroTurn) {
+          final spot = session.heroSpot();
+          final legal = hand.legalActions();
+          if (spot != null && hand.street != Street.preflop) {
+            answered++;
+            expect(spot.frequencies.reduce((a, b) => a + b), closeTo(1, 1e-6));
+            action = spot.actions[spot.frequencies.indexOf(spot.frequencies.reduce(max))].action;
+          } else if (spot != null && hand.street != Street.preflop) {
+            action = spot.actions[spot.frequencies.indexOf(spot.frequencies.reduce(max))].action;
+          } else {
+            // Before the flop, just call: many-way pots.
+            action = legal.canCheck ? const PlayerAction.check() : const PlayerAction.call();
+          }
+        } else {
+          action = session.botDecision();
+        }
+        hand.act(action);
+        await session.afterAction();
+      }
+      session.finishHand();
+    }
+    expect(answered, greaterThan(0), reason: 'decisions answered against the field');
+  });
+
+  test('the field is the opponents\' hands, weighted by how often each is the best', () {
+    final board = [for (final c in parseCards('Kh 9d 4c 2s 7h')) c.index];
+    Float64List only(String a, String b) {
+      final r = Float64List(comboCount);
+      r[comboIndex(PlayingCard.parse(a).index, PlayingCard.parse(b).index)] = 1;
+      return r;
+    }
+
+    // Kings (a set) against nines (a pair): the kings are always the best.
+    final kings = comboIndex(PlayingCard.parse('Ks').index, PlayingCard.parse('Kd').index);
+    final nines = comboIndex(PlayingCard.parse('9s').index, PlayingCard.parse('9h').index);
+    final field = strongestOfField(board, [only('Ks', 'Kd'), only('9s', '9h')]);
+    expect(field[kings], closeTo(1, 1e-9));
+    expect(field[nines], closeTo(0, 1e-9));
   });
 }

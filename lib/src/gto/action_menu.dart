@@ -5,10 +5,11 @@ import 'postflop/postflop_tree.dart';
 import 'preflop/preflop_tree.dart';
 import 'spot_strategy.dart';
 
-/// The user's choices at their decision, the same list every time: fold,
-/// check or call, each size of their menu, all-in. Choices not allowed here
-/// stay in the list, marked unavailable with the reason, so the buttons
-/// never move around.
+/// The user's choices at their decision: fold, check or call, each size of
+/// their menu, all-in. Sizes bigger than the player's whole stack are left
+/// out; other choices not allowed here stay in the list, marked unavailable
+/// with the reason (greyed out), so the buttons move around as little as
+/// possible.
 ///
 /// Before the flop the sizes are multiples of the bet faced (2x means a
 /// raise to 2 BB when first in); after it, shares of the pot (for a raise,
@@ -39,6 +40,8 @@ List<SpotAction> actionMenu(
     final to = preflop
         ? PreflopTree.raiseSize(legal.currentBet, size)
         : PostflopTree.sizeTo(legal.currentBet, legal.streetBet, legal.pot, size, hand.bigBlind);
+    // More than the player has: not shown at all (all-in covers it).
+    if (to >= legal.maxRaiseTo) continue;
     final Unavailable? reason;
     if (!legal.canRaise) {
       reason = Unavailable.raisingNotAllowed;
