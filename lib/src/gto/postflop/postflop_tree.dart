@@ -2,6 +2,7 @@ import 'dart:math';
 
 import '../../engine/events.dart';
 import '../../engine/rules.dart';
+import '../raise_sizes.dart';
 
 /// One street of heads-up betting to solve.
 ///
@@ -14,12 +15,10 @@ class PostflopSpec {
     required this.bigBlind,
     this.raiseRule = RaiseRule.standard,
     this.hero = -1,
-    List<double> heroSizes = defaultHeroSizes,
     List<double> botBetSizes = defaultBotBetSizes,
     List<double> botRaiseSizes = defaultBotRaiseSizes,
   })  : board = List.unmodifiable(board),
         stacks = List.unmodifiable(stacks),
-        heroSizes = List.unmodifiable(heroSizes),
         botBetSizes = List.unmodifiable(botBetSizes),
         botRaiseSizes = List.unmodifiable(botRaiseSizes) {
     if (board.length < 3 || board.length > 5) throw ArgumentError('Board needs 3 to 5 cards');
@@ -27,18 +26,15 @@ class PostflopSpec {
     if (hero < -1 || hero > 1) throw ArgumentError('No such player: $hero');
   }
 
-  /// The user's sizes, for bets and raises alike, at every decision: steps of
-  /// 0.25 up to the pot, 0.5 up to twice the pot, then 3x and 5x (sizes
-  /// bigger than the stack aren't offered).
-  static const defaultHeroSizes = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0];
-
-  /// Bots use fewer sizes, and raise only against the first bet (after
+  /// Bots' sizes (to 0.5 BB), as a share of the pot: for bets, of the pot;
+  /// for raises, of the pot after calling. They use few sizes, and raise
+  /// only against the first bet (after
   /// that they can still go all-in): every size adds to the work.
   static const defaultBotBetSizes = [0.33, 0.75, 1.5];
   static const defaultBotRaiseSizes = [0.75];
 
-  /// A bet or raise to at least this share of the player's stack is left
-  /// out: it is practically all-in, and the all-in choice covers it.
+  /// A bot's bet or raise to at least this share of their stack is left out:
+  /// it is practically all-in, and the all-in choice covers it.
   static const nearlyAllIn = 0.9;
 
   /// Board cards (0-51): 3 on the flop, 4 on the turn, 5 on the river.
@@ -54,13 +50,10 @@ class PostflopSpec {
   /// How small a raise may be.
   final RaiseRule raiseRule;
 
-  /// The user's player (0 or 1), who gets [heroSizes] at every decision;
-  /// -1 when both players are bots.
+  /// The user's player (0 or 1), who gets every size of [raiseSizes] at
+  /// every decision; -1 when both players are bots.
   final int hero;
 
-  /// Sizes as a share of the pot: for bets, of the pot; for raises, of the
-  /// pot after calling. All-in is always available too.
-  final List<double> heroSizes;
   final List<double> botBetSizes;
   final List<double> botRaiseSizes;
 
@@ -75,7 +68,6 @@ class PostflopSpec {
         'bigBlind': bigBlind,
         'raiseRule': raiseRule.name,
         'hero': hero,
-        'heroSizes': heroSizes,
         'botBetSizes': botBetSizes,
         'botRaiseSizes': botRaiseSizes,
       };
@@ -90,7 +82,6 @@ class PostflopSpec {
       bigBlind: (json['bigBlind'] as num).toInt(),
       raiseRule: RaiseRule.values.byName(json['raiseRule'] as String),
       hero: (json['hero'] as num).toInt(),
-      heroSizes: doubles('heroSizes'),
       botBetSizes: doubles('botBetSizes'),
       botRaiseSizes: doubles('botRaiseSizes'),
     );
@@ -188,33 +179,44 @@ class PostflopTree {
     ];
     if (!canRaise) return options;
 
-    final List<double> shares;
+    final pot = spec.pot + s.bets[0] + s.bets[1];
+    final move = s.currentBet == 0 ? PostflopMove.bet : PostflopMove.raise;
     if (p == spec.hero) {
-      shares = spec.heroSizes;
-    } else if (s.currentBet == 0) {
-      shares = spec.botBetSizes;
+      // 1, 2, 3, 5, 8, ... BB from the min-raise up to all-in.
+      for (final to in raiseSizes(
+        minTo: s.currentBet + s.fullRaise,
+        allInTo: coveredAllIn(allInTo, [s.bets[1 - p] + s.left(1 - p)]),
+        bigBlind: spec.bigBlind,
+      )) {
+        options.add(PostflopAction(move, to: to, potShare: potShareOf(to, s.currentBet, s.bets[p], pot)));
+      }
     } else {
-      shares = s.raises == 1 ? spec.botRaiseSizes : const [];
-    }
-    final sized = <int>{};
-    for (final share in shares) {
-      final to = sizeTo(s.currentBet, s.bets[p], spec.pot + s.bets[0] + s.bets[1], share, spec.bigBlind);
-      // Sizes below the min-raise aren't allowed; (nearly) all-in ones are
-      // covered by the all-in choice.
-      if (s.currentBet > 0 && to < s.currentBet + s.fullRaise) continue;
-      if (to >= allInTo * PostflopSpec.nearlyAllIn || !sized.add(to)) continue;
-      options.add(PostflopAction(s.currentBet == 0 ? PostflopMove.bet : PostflopMove.raise, to: to, potShare: share));
+      final shares = s.currentBet == 0 ? spec.botBetSizes : (s.raises == 1 ? spec.botRaiseSizes : const <double>[]);
+      final sized = <int>{};
+      for (final share in shares) {
+        final to = sizeTo(s.currentBet, s.bets[p], pot, share, spec.bigBlind);
+        // Sizes below the min-raise aren't allowed; (nearly) all-in ones are
+        // covered by the all-in choice.
+        if (s.currentBet > 0 && to < s.currentBet + s.fullRaise) continue;
+        if (to >= allInTo * PostflopSpec.nearlyAllIn || !sized.add(to)) continue;
+        options.add(PostflopAction(move, to: to, potShare: share));
+      }
     }
     options.add(PostflopAction(PostflopMove.allIn, to: allInTo));
     return options;
   }
 
-  /// The total bet for a size given as a share of the pot: a bet of that
-  /// share of [pot] (at least one big blind), or a raise of that share of
-  /// the pot after calling.
+  /// The total bet for a size given as a share of the pot, to 0.5 BB: a bet
+  /// of that share of [pot] (at least one big blind), or a raise of that
+  /// share of the pot after calling.
   static int sizeTo(int currentBet, int playerBet, int pot, double share, int bigBlind) => currentBet == 0
-      ? max((share * pot).round(), bigBlind)
-      : currentBet + (share * (pot + currentBet - playerBet)).round();
+      ? max(roundToHalfBb(share * pot, bigBlind), bigBlind)
+      : roundToHalfBb(currentBet + share * (pot + currentBet - playerBet), bigBlind);
+
+  /// A bet or raise to [to] as a share of the pot, the inverse of [sizeTo]:
+  /// for a bet, of [pot]; for a raise, of the pot after calling.
+  static double potShareOf(int to, int currentBet, int playerBet, int pot) =>
+      currentBet == 0 ? to / pot : (to - currentBet) / (pot + currentBet - playerBet);
 
   PostflopTerminal _terminal(_State s) {
     final bets = List.of(s.bets);

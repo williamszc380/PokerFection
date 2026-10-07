@@ -28,7 +28,6 @@ class PreflopTracker {
     required this.blueprint,
     required this.solveSubgame,
     required this.heroSeat,
-    this.raiseMultiples = PreflopSettings.defaultRaiseMultiples,
   });
 
   /// The whole game, solved with the bots' menu for everyone.
@@ -37,7 +36,6 @@ class PreflopTracker {
 
   /// The user's seat.
   final int heroSeat;
-  final List<double> raiseMultiples;
 
   /// The user's subgames in this hand, by how many preflop actions came
   /// before them.
@@ -57,6 +55,9 @@ class PreflopTracker {
     final pending = _pending[k] ??= _solve(hand, history);
     try {
       _subgames[k] = await pending;
+    } on _OffTheSolvedLines {
+      // Someone made a move the solved game doesn't have (online, a person can).
+      unavailable = NoAnswer.leftSolvedLines;
     } on Object {
       unavailable = NoAnswer.solveFailed;
     } finally {
@@ -79,7 +80,6 @@ class PreflopTracker {
       ante: hand.ante,
       raiseRule: hand.raiseRule,
       heroSeat: heroSeat,
-      raiseMultiples: raiseMultiples,
       history: history,
     );
     // Folds (or nothing) so far: every player still in has their full
@@ -88,7 +88,7 @@ class PreflopTracker {
     Float64List? ranges;
     if (!onlyFolds) {
       final walk = _walk(hand);
-      if (walk == null) throw StateError('The hand left the solved lines');
+      if (walk == null) throw const _OffTheSolvedLines();
       ranges = Float64List(hand.playerCount * handClassCount)..fillRange(0, hand.playerCount * handClassCount, 1);
       for (var seat = 0; seat < hand.playerCount; seat++) {
         // A folded player's range doesn't matter; it stays full.
@@ -167,6 +167,12 @@ class PreflopTracker {
   /// [anySize], a raise counts as raising at any size (see [_Walk.rangeOf]).
   Float64List? rangeOf(PokerHand hand, int seat, {bool anySize = false}) =>
       _walk(hand)?.rangeOf(PreflopAdvisor.orderOf(hand, seat), anySize: anySize);
+}
+
+/// The hand left the solved lines before the user's decision: there is no
+/// subgame to solve.
+class _OffTheSolvedLines implements Exception {
+  const _OffTheSolvedLines();
 }
 
 class _Step {

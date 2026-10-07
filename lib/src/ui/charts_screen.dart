@@ -27,7 +27,7 @@ class ChartsScreen extends StatefulWidget {
 class _ChartsScreenState extends State<ChartsScreen> {
   static Future<PreflopCharts>? _charts;
 
-  int _players = 6;
+  int _players = 2;
   int _stack = 100;
   Position _hero = Position.btn;
   ChartSpot _spot = ChartSpot.open;

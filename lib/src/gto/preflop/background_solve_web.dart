@@ -53,23 +53,29 @@ Future<(Float32List, Float32List)?> _solveInWorker(
   int size, [
   void Function(double progress)? onProgress,
 ]) async {
-  final worker = await SolverWorker.start();
-  if (worker == null) return null;
-  try {
-    worker.send(request);
-    while (true) {
-      final reply = await worker.next();
-      if (reply.kind == 'progress') {
-        onProgress?.call(reply.progress);
-        continue;
+  while (true) {
+    final worker = await SolverWorker.start();
+    if (worker == null) return null;
+    try {
+      worker.send(request);
+      while (true) {
+        final reply = await worker.next();
+        if (reply.kind == 'progress') {
+          onProgress?.call(reply.progress);
+          continue;
+        }
+        final strategy = reply.strategy.toDart;
+        if (strategy.length == size) return (strategy, reply.values.toDart);
+        // A worker script from another build (a cached copy) has other trees.
+        SolverWorker.disable();
+        return null;
       }
-      final strategy = reply.strategy.toDart;
-      if (strategy.length == size) return (strategy, reply.values.toDart);
-      // A worker script from another build (a cached copy) has other trees.
-      SolverWorker.disable();
-      return null;
+    } on StateError {
+      // A browser's WebAssembly may fail where its JavaScript doesn't.
+      if (!worker.wasm) rethrow;
+      SolverWorker.disableWasm();
+    } finally {
+      worker.stop();
     }
-  } finally {
-    worker.stop();
   }
 }

@@ -78,6 +78,15 @@ class HistoryScreen extends StatelessWidget {
                           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                           children: [
                             for (final d in hand.decisions) DecisionView(record: d),
+                            // Online: who used help or looked at cards in this hand.
+                            for (final note in hand.notes)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(s.note(note), style: muted),
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -138,7 +147,8 @@ class RecentScores extends StatelessWidget {
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final fit = ((constraints.maxWidth + _gap) / (_box + _gap)).floor().clamp(0, 10);
+                // Each square has its gap before it.
+                final fit = (constraints.maxWidth / (_box + _gap)).floor().clamp(0, 10);
                 final shown = scored.sublist(scored.length - fit.clamp(0, scored.length));
                 return Row(
                   mainAxisAlignment: MainAxisAlignment.end,

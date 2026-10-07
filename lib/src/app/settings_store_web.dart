@@ -2,9 +2,16 @@ import 'dart:convert';
 
 import 'package:web/web.dart' as web;
 
-/// Reads and writes the settings in the browser's local storage.
+/// Reads and writes the settings in the browser's local storage (a set
+/// per [profile]); another [name] keeps something else there the same way
+/// (the drills).
 class SettingsStore {
-  static const _key = 'pokerfection.settings';
+  SettingsStore({this.profile, this.name = 'settings'});
+
+  final int? profile;
+  final String name;
+
+  String get _key => profile == null ? 'pokerfection.$name' : 'pokerfection.$name.$profile';
 
   Future<Map<String, Object?>> read() async {
     try {

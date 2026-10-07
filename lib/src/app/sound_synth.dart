@@ -8,73 +8,77 @@ enum SoundEffect { deal, chips, fold, check, yourTurn, win }
 const soundSampleRate = 22050;
 
 /// The samples of [effect] at full volume (-1 to 1), mono at [soundSampleRate].
+///
+/// Every sound is made of soft tones (no noise, which sounds like static):
+/// each note starts gently, slides a little in pitch and fades out, and the
+/// whole sound is smoothed and fades to silence at its ends, so nothing
+/// clicks.
 Float64List synthesize(SoundEffect effect) {
   const rate = soundSampleRate;
-  final random = Random(effect.index + 1);
   Float64List buffer(double seconds) => Float64List((seconds * rate).round());
 
-  /// Adds a note: a sine (with a touch of its octave) that fades out.
-  void tone(Float64List out, double start, double hz, double length, double level) {
+  /// Adds a note sliding from [hz] to [toHz] (a sine with a touch of its
+  /// octave), rising over [attack] seconds and fading out over [length].
+  void note(Float64List out, double start, double hz, double length, double level,
+      {double? toHz, double attack = 0.004, double octave = 0.15}) {
     final from = (start * rate).round();
+    final end = toHz ?? hz;
+    var phase = 0.0;
     for (var i = 0; i < length * rate && from + i < out.length; i++) {
       final t = i / rate;
-      final fade = exp(-t / (length / 4)) * min(1.0, t / 0.003);
-      out[from + i] += level * fade * (sin(2 * pi * hz * t) + 0.25 * sin(4 * pi * hz * t));
+      phase += 2 * pi * hz * pow(end / hz, t / length) / rate;
+      final fade = exp(-t / (length / 4)) * min(1.0, t / attack);
+      out[from + i] += level * fade * (sin(phase) + octave * sin(2 * phase));
     }
   }
 
-  /// Adds a burst of noise, smoothed (lower [bright] is duller) and faded.
-  void noise(Float64List out, double start, double length, double level, double bright) {
-    final from = (start * rate).round();
-    var smooth = 0.0;
-    for (var i = 0; i < length * rate && from + i < out.length; i++) {
-      final t = i / rate;
-      smooth += bright * (random.nextDouble() * 2 - 1 - smooth);
-      out[from + i] += level * smooth * sin(pi * t / length);
-    }
-  }
+  final samples = switch (effect) {
+    // A card sliding onto the felt: a quick, low flick.
+    SoundEffect.deal => buffer(0.08)..apply((b) => note(b, 0, 520, 0.06, 0.22, toHz: 340, octave: 0)),
+    // Chips set down: three soft clay tocks.
+    SoundEffect.chips => buffer(0.18)
+      ..apply((b) {
+        note(b, 0, 1150, 0.035, 0.2, toHz: 950);
+        note(b, 0.045, 1000, 0.035, 0.15, toHz: 840);
+        note(b, 0.09, 1250, 0.035, 0.11, toHz: 1020);
+      }),
+    // Cards tossed away: a gentle falling tone.
+    SoundEffect.fold => buffer(0.18)..apply((b) => note(b, 0, 420, 0.16, 0.16, toHz: 260, attack: 0.015, octave: 0)),
+    // Two knocks on the table.
+    SoundEffect.check => buffer(0.22)
+      ..apply((b) {
+        note(b, 0, 230, 0.07, 0.4, toHz: 180);
+        note(b, 0.1, 230, 0.07, 0.4, toHz: 180);
+      }),
+    // A soft two-note chime.
+    SoundEffect.yourTurn => buffer(0.55)
+      ..apply((b) {
+        note(b, 0, 784, 0.4, 0.2, attack: 0.008, octave: 0.05);
+        note(b, 0.14, 1047, 0.4, 0.2, attack: 0.008, octave: 0.05);
+      }),
+    // A rising major chord, one note after another.
+    SoundEffect.win => buffer(0.75)
+      ..apply((b) {
+        note(b, 0, 523, 0.45, 0.18, attack: 0.008, octave: 0.1);
+        note(b, 0.1, 659, 0.45, 0.18, attack: 0.008, octave: 0.1);
+        note(b, 0.2, 784, 0.5, 0.18, attack: 0.008, octave: 0.1);
+      }),
+  };
+  return _smooth(samples);
+}
 
-  /// Adds a clack: a very short, bright ring (chips hitting chips).
-  void click(Float64List out, double start, double hz, double level) {
-    final from = (start * rate).round();
-    for (var i = 0; i < 0.03 * rate && from + i < out.length; i++) {
-      final t = i / rate;
-      out[from + i] += level * exp(-t / 0.004) * (sin(2 * pi * hz * t) + 0.6 * (random.nextDouble() * 2 - 1));
-    }
+/// Takes the edge off [samples]: a gentle low-pass (nothing harsh above
+/// about 5 kHz) and a few milliseconds of fade at both ends.
+Float64List _smooth(Float64List samples) {
+  const fade = soundSampleRate * 0.004;
+  final keep = exp(-2 * pi * 5000 / soundSampleRate);
+  var last = 0.0;
+  for (var i = 0; i < samples.length; i++) {
+    last = (1 - keep) * samples[i] + keep * last;
+    final edge = min(1.0, min(i, samples.length - 1 - i) / fade);
+    samples[i] = last * edge;
   }
-
-  switch (effect) {
-    case SoundEffect.deal:
-      return buffer(0.07)..apply((b) => noise(b, 0, 0.06, 0.5, 0.6));
-    case SoundEffect.chips:
-      return buffer(0.12)
-        ..apply((b) {
-          click(b, 0, 3400, 0.45);
-          click(b, 0.035, 2900, 0.35);
-          click(b, 0.07, 3700, 0.25);
-        });
-    case SoundEffect.fold:
-      return buffer(0.14)..apply((b) => noise(b, 0, 0.13, 0.35, 0.2));
-    case SoundEffect.check:
-      return buffer(0.2)
-        ..apply((b) {
-          tone(b, 0, 170, 0.06, 0.6);
-          tone(b, 0.1, 170, 0.06, 0.6);
-        });
-    case SoundEffect.yourTurn:
-      return buffer(0.45)
-        ..apply((b) {
-          tone(b, 0, 988, 0.3, 0.3);
-          tone(b, 0.13, 1319, 0.3, 0.3);
-        });
-    case SoundEffect.win:
-      return buffer(0.6)
-        ..apply((b) {
-          tone(b, 0, 1047, 0.3, 0.25);
-          tone(b, 0.09, 1319, 0.3, 0.25);
-          tone(b, 0.18, 1568, 0.4, 0.25);
-        });
-  }
+  return samples;
 }
 
 extension on Float64List {

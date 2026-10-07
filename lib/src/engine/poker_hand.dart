@@ -42,7 +42,47 @@ class PokerHand {
     Random? random,
     Map<int, List<PlayingCard>> holeCards = const {},
     List<PlayingCard> board = const [],
-  }) : _presetBoard = List.of(board) {
+  })  : isMirror = false,
+        _presetBoard = List.of(board) {
+    _checkSetup(stacks);
+    _checkPresets(stacks.length, holeCards, board);
+    _deck = Deck.shuffled(
+      random ?? Random(),
+      exclude: [...holeCards.values.expand((c) => c), ...board],
+    );
+    _start(stacks, holeCards);
+  }
+
+  /// A copy of a hand played somewhere else (online, on the server), which
+  /// knows only some of the cards: [known] hole cards (the user's, and on
+  /// the host's device the bots'), and the [board] and [revealed] hands
+  /// dealt so far. It has no deck: the rest of the board comes in through
+  /// [supplyBoard], and shown hands through [supplyReveal], before the
+  /// action that deals or shows them. Seats with unknown cards get none
+  /// (see [knows]); everything else plays exactly like a normal hand.
+  ///
+  /// [board] and [revealed] are needed here when the hand can end as soon
+  /// as it starts (the blinds put everyone all-in).
+  PokerHand.mirror({
+    required List<int> stacks,
+    required this.buttonSeat,
+    required this.smallBlind,
+    required this.bigBlind,
+    this.ante = 0,
+    this.handNumber = 1,
+    this.raiseRule = RaiseRule.standard,
+    Map<int, List<PlayingCard>> known = const {},
+    List<PlayingCard> board = const [],
+    Map<int, List<PlayingCard>> revealed = const {},
+  })  : isMirror = true,
+        _presetBoard = List.of(board) {
+    _checkSetup(stacks);
+    _checkPresets(stacks.length, known, board);
+    _deck = null;
+    _start(stacks, known, revealed: revealed);
+  }
+
+  void _checkSetup(List<int> stacks) {
     final n = stacks.length;
     if (n < 2 || n > 8) throw ArgumentError('A table needs 2 to 8 players');
     if (stacks.any((s) => s <= 0)) throw ArgumentError('Every stack must be positive');
@@ -50,15 +90,17 @@ class PokerHand {
     if (smallBlind <= 0 || bigBlind < smallBlind || ante < 0) {
       throw ArgumentError('Invalid blinds or ante');
     }
-    _checkPresets(n, holeCards, board);
+  }
 
+  void _start(
+    List<int> stacks,
+    Map<int, List<PlayingCard>> holeCards, {
+    Map<int, List<PlayingCard>> revealed = const {},
+  }) {
+    final n = stacks.length;
     _seats = [for (var i = 0; i < n; i++) _Seat(i, stacks[i])];
     _startingStacks = List.unmodifiable(stacks);
     _positions = positionsBySeat(n, buttonSeat);
-    _deck = Deck.shuffled(
-      random ?? Random(),
-      exclude: [...holeCards.values.expand((c) => c), ...board],
-    );
 
     _emit(HandStarted(
       handNumber: handNumber,
@@ -70,6 +112,7 @@ class PokerHand {
     _postBlind(smallBlindSeat(n, buttonSeat), smallBlind, isBig: false);
     _postBlind(bigBlindSeat(n, buttonSeat), bigBlind, isBig: true);
     _dealHoleCards(holeCards);
+    if (revealed.isNotEmpty) supplyReveal(revealed);
 
     // The big blind sets the price even if that player is all-in for less.
     _currentBet = bigBlind;
@@ -87,10 +130,17 @@ class PokerHand {
   /// How small a raise may be.
   final RaiseRule raiseRule;
 
+  /// A copy of a hand played elsewhere (see [PokerHand.mirror]).
+  final bool isMirror;
+
   late final List<_Seat> _seats;
   late final List<int> _startingStacks;
   late final Map<int, Position> _positions;
-  late final Deck _deck;
+
+  /// Null in a mirror, which is told the cards instead.
+  late final Deck? _deck;
+
+  /// Board cards fixed in advance (or, in a mirror, received so far).
   final List<PlayingCard> _presetBoard;
 
   Street _street = Street.preflop;
@@ -132,7 +182,11 @@ class PokerHand {
   int get potTotal => _seats.fold(0, (sum, s) => sum + s.committed);
 
   int get livePlayerCount => _seats.where((s) => !s.folded).length;
+  /// The seat's two cards; none for a seat a mirror doesn't know.
   List<PlayingCard> holeCards(int seat) => List.unmodifiable(_seats[seat].cards);
+
+  /// Whether this hand knows [seat]'s cards: always, except in a mirror.
+  bool knows(int seat) => _seats[seat].cards.length == 2;
   int stackOf(int seat) => _seats[seat].stack;
   int startingStackOf(int seat) => _startingStacks[seat];
   int streetBetOf(int seat) => _seats[seat].streetBet;
@@ -225,6 +279,45 @@ class PokerHand {
   }
 
   // ---------------------------------------------------------------------------
+  // Mirror
+  // ---------------------------------------------------------------------------
+
+  /// A mirror's next board cards, in the order they are dealt; supply them
+  /// before the action that deals them.
+  void supplyBoard(List<PlayingCard> cards) {
+    if (!isMirror) throw StateError('Only a mirror is told the board');
+    if (_presetBoard.length + cards.length > 5) throw ArgumentError('The board has at most 5 cards');
+    for (final card in cards) {
+      if (_inUse(card)) throw ArgumentError('$card is used twice');
+      _presetBoard.add(card);
+    }
+  }
+
+  /// Hands shown at showdown (or when everyone is all-in), by seat: fills
+  /// in the seats this hand doesn't know. A seat it knows must show the
+  /// same cards. Supply them before the action that shows them.
+  void supplyReveal(Map<int, List<PlayingCard>> cards) {
+    for (final MapEntry(key: seat, value: shown) in cards.entries) {
+      if (seat < 0 || seat >= playerCount) throw RangeError.range(seat, 0, playerCount - 1, 'seat');
+      if (shown.length != 2) throw ArgumentError('Seat $seat needs exactly 2 cards');
+      final s = _seats[seat];
+      if (s.folded) throw ArgumentError('Seat $seat folded');
+      if (s.cards.isNotEmpty) {
+        if (s.cards[0] != shown[0] || s.cards[1] != shown[1]) {
+          throw ArgumentError('Seat $seat shows other cards');
+        }
+        continue;
+      }
+      if (shown[0] == shown[1] || shown.any(_inUse)) throw ArgumentError('A card is used twice');
+      s.cards.addAll(shown);
+    }
+  }
+
+  /// Whether [card] is someone's hole card or on (or due on) the board.
+  bool _inUse(PlayingCard card) =>
+      _presetBoard.contains(card) || _board.contains(card) || _seats.any((s) => s.cards.contains(card));
+
+  // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
 
@@ -279,14 +372,20 @@ class PokerHand {
   void _dealHoleCards(Map<int, List<PlayingCard>> preset) {
     final n = playerCount;
     final order = [for (var k = 1; k <= n; k++) (buttonSeat + k) % n];
+    final deck = _deck;
     for (var round = 0; round < 2; round++) {
       for (final seat in order) {
-        _seats[seat].cards.add(preset[seat]?[round] ?? _deck.deal());
+        // A mirror leaves the seats it doesn't know empty.
+        final card = preset[seat]?[round] ?? deck?.deal();
+        if (card != null) _seats[seat].cards.add(card);
       }
     }
     _emit(HoleCardsDealt(
       dealOrder: order,
-      cards: {for (final s in _seats) s.index: List.unmodifiable(s.cards)},
+      cards: {
+        for (final s in _seats)
+          if (s.cards.isNotEmpty) s.index: List.unmodifiable(s.cards),
+      },
     ));
   }
 
@@ -395,7 +494,9 @@ class PokerHand {
     final dealt = <PlayingCard>[];
     for (var i = 0; i < count; i++) {
       final index = _board.length;
-      final card = index < _presetBoard.length ? _presetBoard[index] : _deck.deal();
+      final deck = _deck;
+      if (index >= _presetBoard.length && deck == null) throw StateError('Board card not received');
+      final card = index < _presetBoard.length ? _presetBoard[index] : deck!.deal();
       _board.add(card);
       dealt.add(card);
     }
@@ -417,6 +518,7 @@ class PokerHand {
 
   void _reveal() {
     if (_revealed) return;
+    if (_seats.any((s) => !s.folded && s.cards.isEmpty)) throw StateError('Shown cards not received');
     _revealed = true;
     _emit(HandsRevealed({
       for (final s in _seats)

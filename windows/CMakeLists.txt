@@ -102,6 +102,17 @@ install(CODE "
 install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
 
+# The web version, served to browser players when this app hosts a room:
+# copied to data/web when `dart run tool/build_web.dart --host` has made it
+# (in build/web_host). Without it, hosting works for app players only.
+set(WEB_HOST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../build/web_host")
+install(CODE "
+  file(REMOVE_RECURSE \"${INSTALL_BUNDLE_DATA_DIR}/web\")
+  if(EXISTS \"${WEB_HOST_DIR}/index.html\")
+    file(COPY \"${WEB_HOST_DIR}/\" DESTINATION \"${INSTALL_BUNDLE_DATA_DIR}/web\")
+  endif()
+  " COMPONENT Runtime)
+
 # Install the AOT library on non-Debug builds only.
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release

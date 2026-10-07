@@ -12,7 +12,12 @@ class DecisionRecord {
     required this.mix,
     required this.score,
     this.oneAction = false,
+    this.turnId,
   });
+
+  /// Online: the server's turn this decision was made at, to correct
+  /// [played] if the server played something else (the time ran out).
+  final int? turnId;
 
   /// One action played (simple training) rather than a mix: scored by
   /// [DecisionScore.playScore].
@@ -31,6 +36,17 @@ class DecisionRecord {
 
   /// The action that was played (drawn from [mix]), once known.
   int? played;
+}
+
+/// Online: something everyone at the table was told during a hand. [name]
+/// pressed Show GTO or, with a [target], looked at the target's cards; a
+/// null name or target is the user.
+class HandNote {
+  const HandNote({required this.name, this.peek = false, this.target});
+
+  final String? name;
+  final bool peek;
+  final String? target;
 }
 
 /// The user's scored decisions in one hand.
@@ -52,6 +68,9 @@ class HandRecord {
 
   /// Chips won (positive) or lost, once the hand is over.
   int? result;
+
+  /// Online: what everyone at the table was told during the hand.
+  final List<HandNote> notes = [];
 
   double? get averageScore => decisions.isEmpty
       ? null

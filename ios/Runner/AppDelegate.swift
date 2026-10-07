@@ -19,8 +19,9 @@ import UIKit
   }
 }
 
-/// What the app asks of the host: where to keep its settings file, and
-/// playing its sound effects (short WAV files it makes itself).
+/// What the app asks of the host: where to keep its settings file, keeping
+/// the screen on while hosting a room, and playing its sound effects (short
+/// WAV files it makes itself).
 enum HostChannels {
   /// Players still sounding (they stop if released early).
   static var players: [AVAudioPlayer] = []
@@ -31,11 +32,18 @@ enum HostChannels {
 
     FlutterMethodChannel(name: "pokerfection/platform", binaryMessenger: messenger).setMethodCallHandler {
       call, result in
-      if call.method == "dataFolder",
-        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-      {
-        result(folder.path)
-      } else {
+      switch call.method {
+      case "dataFolder":
+        if let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+          result(folder.path)
+        } else {
+          result(nil)
+        }
+      case "keepScreenOn":
+        // A room hosted here stops when the app goes to sleep.
+        UIApplication.shared.isIdleTimerDisabled = (call.arguments as? Bool) ?? false
+        result(nil)
+      default:
         result(FlutterMethodNotImplemented)
       }
     }

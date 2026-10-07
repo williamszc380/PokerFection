@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Online play talks to the game server. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- A room hosted here hears friends looking for it by its code (Wi-Fi broadcasts). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <application
         android:label="PokerFection"
         android:name="${applicationName}"
@@ -24,6 +28,15 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Invite links (pokerfection://join?code=...) open the app; Flutter
+                 hands them to it as a route. -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="true" />
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pokerfection" android:host="join" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

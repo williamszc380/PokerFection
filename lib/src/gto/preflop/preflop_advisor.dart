@@ -31,7 +31,6 @@ class PreflopAdvisor {
     required int ante,
     RaiseRule raiseRule = RaiseRule.standard,
     int? heroSeat,
-    List<double> raiseMultiples = PreflopSettings.defaultRaiseMultiples,
     List<PreflopAction> history = const [],
   }) {
     final n = stacksBySeat.length;
@@ -42,7 +41,6 @@ class PreflopAdvisor {
       bigBlind: bigBlind,
       ante: ante,
       raiseRule: raiseRule,
-      raiseMultiples: raiseMultiples,
       history: history,
       hero: heroSeat == null ? -1 : (heroSeat - first + 2 * n) % n,
     );
@@ -93,13 +91,15 @@ class PreflopAdvisor {
 
   /// The user's answer at [node] (the start of their subgame), for every
   /// choice of their menu (see [actionMenu]); the ones not allowed here are
-  /// greyed out.
-  SpotStrategy spotAt(PreflopDecision node, PokerHand hand) {
+  /// greyed out. Null if the hand doesn't know their cards (an online
+  /// mirror, see [PokerHand.mirror]).
+  SpotStrategy? spotAt(PreflopDecision node, PokerHand hand) {
+    if (!hand.knows(hand.toAct!)) return null;
     final cards = hand.holeCards(hand.toAct!);
     final handClass = handClassOf(cards[0], cards[1]);
     final invested = node.contributions[node.player];
     return answerFor(
-      actionMenu(hand, preflopSizes: tree.spec.raiseMultiples, postflopSizes: const []),
+      actionMenu(hand),
       handName: handClassName(handClass),
       indexOf: (choice) => node.actions.indexWhere((a) => switch (choice.kind) {
             SpotActionKind.fold => a.move == PreflopMove.fold,
@@ -118,8 +118,9 @@ class PreflopAdvisor {
   }
 
   /// A move for the bot to act at [node], drawn from the solved strategy
-  /// for the bot's starting hand.
-  PlayerAction sampleAt(PreflopDecision node, PokerHand hand, Random random) {
+  /// for the bot's starting hand. Null if the hand doesn't know its cards.
+  PlayerAction? sampleAt(PreflopDecision node, PokerHand hand, Random random) {
+    if (!hand.knows(hand.toAct!)) return null;
     final cards = hand.holeCards(hand.toAct!);
     final handClass = handClassOf(cards[0], cards[1]);
     var roll = random.nextDouble();

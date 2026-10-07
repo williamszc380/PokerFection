@@ -14,7 +14,7 @@ void main(List<String> args) {
   final which = args.isNotEmpty ? args[0] : '799';
   final (spec, name) = switch (which) {
     '815' => (
-        PreflopSpec(stacks: [1742, 488, 1389], ante: 48, hero: 0, raiseMultiples: [1.5, 2.2, 4.0]),
+        PreflopSpec(stacks: [1742, 488, 1389], ante: 48, hero: 0),
         '77',
       ),
     _ => (
@@ -22,7 +22,6 @@ void main(List<String> args) {
           stacks: [1741, 2692, 1449, 2566],
           ante: 25,
           hero: 1,
-          raiseMultiples: [2.2, 2.5, 3.0, 5.0, 6.0],
           history: [const PreflopAction(PreflopMove.raise, 305)],
         ),
         'JJ',

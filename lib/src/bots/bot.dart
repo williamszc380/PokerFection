@@ -5,6 +5,7 @@ import '../engine/equity.dart';
 import '../engine/events.dart';
 import '../engine/poker_hand.dart';
 import '../engine/positions.dart';
+import '../gto/raise_sizes.dart';
 import 'preflop_ranking.dart';
 
 enum BotStyle {
@@ -59,11 +60,12 @@ class Bot {
   final Random _random;
 
   PlayerAction decide(PokerHand hand, int seat) {
+    if (!hand.knows(seat)) throw StateError("Seat $seat's cards are unknown here");
     final legal = hand.legalActions();
     final action = hand.street == Street.preflop
         ? _preflop(hand, seat, legal)
         : _postflop(hand, seat, legal);
-    return _makeLegal(action, legal);
+    return _makeLegal(action, legal, hand.bigBlind);
   }
 
   // ---------------------------------------------------------------------------
@@ -190,8 +192,9 @@ class Bot {
   PlayerAction _betFraction(LegalActions legal, double fraction, int pot) =>
       PlayerAction.raiseTo(legal.currentBet + (pot * fraction).round());
 
-  /// Clamps an intended action so the engine always accepts it.
-  PlayerAction _makeLegal(PlayerAction action, LegalActions legal) {
+  /// Clamps an intended action so the engine always accepts it (raises to
+  /// 0.5 BB, like everyone's).
+  PlayerAction _makeLegal(PlayerAction action, LegalActions legal, int bigBlind) {
     switch (action.type) {
       case ActionType.fold:
         return legal.canCheck ? const PlayerAction.check() : action;
@@ -203,7 +206,7 @@ class Bot {
         if (!legal.canRaise) {
           return legal.canCall ? const PlayerAction.call() : const PlayerAction.check();
         }
-        var to = action.amount.clamp(legal.minRaiseTo, legal.maxRaiseTo);
+        var to = roundToHalfBb(action.amount, bigBlind).clamp(legal.minRaiseTo, legal.maxRaiseTo);
         // Don't leave a tiny stack behind: commit fully instead.
         if (to >= legal.maxRaiseTo * 0.7) to = legal.maxRaiseTo;
         return PlayerAction.raiseTo(to);

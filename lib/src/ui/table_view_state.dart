@@ -9,7 +9,30 @@ import '../game/table_session.dart';
 class SeatView {
   SeatView({required this.info, required this.stack});
 
-  final PlayerInfo info;
+  /// Who sits here. Online, someone else can take the seat between hands.
+  PlayerInfo info;
+
+  /// Online: the player is still at the table (one who left has their
+  /// turns played for them until the hand ends).
+  bool connected = true;
+
+  /// Online: the player's connection dropped; the seat waits for them a
+  /// while, and their turns are checked or folded after a few seconds.
+  bool away = false;
+
+  /// Online: someone takes this seat from the next hand.
+  bool joiningNextHand = false;
+
+  /// Online: the host took this bot away, from the next hand.
+  bool leavingNextHand = false;
+
+  /// Online: out of chips (from the end of the hand they lost them in):
+  /// at the table without playing, until they rebuy or the game ends.
+  bool out = false;
+
+  /// Online: sits out (not in the hand on screen): at the table with their
+  /// chips, without playing, until they are back.
+  bool sittingOut = false;
 
   /// The bot's actual style (random ones resolved); null for the user.
   BotStyle? style;
@@ -51,9 +74,21 @@ class SeatView {
 }
 
 class TableViewState {
-  TableViewState(this.seats);
+  TableViewState(this.seats, {List<int>? places, this.others = const []})
+      : places = places ?? [for (var i = 0; i < seats.length; i++) i];
 
+  /// The players of the hand, by seat.
   final List<SeatView> seats;
+
+  /// Where each seat sits around the table, out of [placeCount]: 0 at the
+  /// bottom (the user), then clockwise.
+  final List<int> places;
+
+  /// Online: players at the table who don't play this hand (out of chips,
+  /// or sitting out), in places of their own.
+  final List<OtherSeat> others;
+
+  int get placeCount => seats.length + others.length;
   int? buttonSeat;
   int? actingSeat;
   final List<PlayingCard> board = [];
@@ -66,6 +101,23 @@ class TableViewState {
 
   /// The user's result for the hand that just finished.
   int? heroResult;
+
+  /// Online: when the acting player's time runs out (null: no limit), and
+  /// how long they have in all (for the clocks: see TurnClock).
+  DateTime? turnEnds;
+  Duration? turnLimit;
+}
+
+/// Online: someone at the table who doesn't play the hand on screen (out of
+/// chips, or sitting out), in room seat [roomSeat], at [place] around the
+/// table; [user] when it is the user, who watches.
+class OtherSeat {
+  OtherSeat({required this.roomSeat, required this.place, required this.view, this.user = false});
+
+  final int roomSeat;
+  final int place;
+  final SeatView view;
+  final bool user;
 }
 
 enum AnchorKind { seat, seatCards, bet, pot, deck, board }

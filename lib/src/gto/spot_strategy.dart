@@ -5,7 +5,7 @@ import '../engine/actions.dart';
 enum SpotActionKind { fold, check, call, raise, allIn }
 
 /// Why a choice isn't allowed at a decision (it stays in the list, greyed out).
-enum Unavailable { checkIsFree, raisingNotAllowed, belowMinBet, belowMinRaise, nearlyAllIn, sameAmount, notSolved }
+enum Unavailable { checkIsFree, raisingNotAllowed, notSolved }
 
 /// Why a decision has no GTO answer.
 enum NoAnswer { multiway, leftSolvedLines, solveFailed }
@@ -62,8 +62,12 @@ class SpotStrategy {
   });
 
   /// Builds the answer from raw solver numbers: frequencies are rescaled to
-  /// add up to 1, and a choice GTO (almost) never makes is never shown as
-  /// better than the best one it does make (small solver noise).
+  /// add up to 1. The choices GTO really uses (at least [mixed] of the time)
+  /// are equally good, as in an exact solution; a solver stopped after a few
+  /// seconds leaves small gaps between them, so each gets the EV of GTO's
+  /// mix of them (or exactly fold's, when fold is one of them: its value is
+  /// exact, the others are estimates). A choice GTO (almost) never makes is
+  /// never shown as better than that.
   factory SpotStrategy.normalized({
     required String handName,
     required List<SpotAction> actions,
@@ -72,20 +76,33 @@ class SpotStrategy {
   }) {
     final total = frequencies.fold(0.0, (a, b) => a + b);
     final shares = [for (final f in frequencies) total > 0 ? f / total : 0.0];
-    var bestUsed = double.negativeInfinity;
-    for (var i = 0; i < evs.length; i++) {
-      if (shares[i] >= 0.01 && !evs[i].isNaN) bestUsed = max(bestUsed, evs[i]);
-    }
+    // GTO's choices: those it uses at least [mixed] of the time (failing
+    // that, at least 1%), and what they are worth together.
+    final used = [for (var i = 0; i < evs.length; i++) if (shares[i] >= mixed && !evs[i].isNaN) i];
+    if (used.isEmpty) used.addAll([for (var i = 0; i < evs.length; i++) if (shares[i] >= 0.01 && !evs[i].isNaN) i]);
+    final fold = used.where((i) => actions[i].kind == SpotActionKind.fold).firstOrNull;
+    final weight = used.fold(0.0, (sum, i) => sum + shares[i]);
+    final worth = fold != null
+        ? evs[fold]
+        : (weight > 0 ? used.fold(0.0, (sum, i) => sum + shares[i] * evs[i]) / weight : double.nan);
     return SpotStrategy(
       handName: handName,
       actions: actions,
       frequencies: shares,
       evs: [
         for (var i = 0; i < evs.length; i++)
-          shares[i] < 0.01 && !evs[i].isNaN && bestUsed.isFinite ? min(evs[i], bestUsed) : evs[i],
+          evs[i].isNaN || worth.isNaN
+              ? evs[i]
+              : used.contains(i)
+                  ? worth
+                  : min(evs[i], worth),
       ],
     );
   }
+
+  /// How often GTO must take a choice for it to count as one of GTO's own
+  /// (rarer ones are mostly what the solver hasn't finished dropping).
+  static const mixed = 0.05;
 
   /// Starting hand, e.g. "AJo".
   final String handName;
@@ -150,6 +167,75 @@ class DecisionScore {
 const sizeWeight = 0.1;
 
 /// Compares the user's mix ([user], adding up to 1) with the GTO answer.
+/// What a play did wrong, in a word: what the user did too much of.
+enum MistakeKind { tooTight, tooLoose, tooPassive, tooAggressive, wrongSize }
+
+/// What [mix] (the user's play, or their percentages) did wrong against
+/// GTO's answer, and GTO's most common choice instead (an index in
+/// [SpotStrategy.actions]); null if the two match.
+///
+/// As in the score, the EV lost splits into the choice (fold, check or
+/// call, or raise) and the raise size. When the size costs more, the size
+/// was off. Otherwise the group the user overdid says how: folding, too
+/// tight; calling where GTO folds, too loose; where GTO raises, too
+/// passive; raising, too aggressive.
+(MistakeKind, int)? mistakeOf(SpotStrategy spot, List<double> mix) {
+  int group(SpotAction a) => switch (a.kind) {
+        SpotActionKind.fold => 0,
+        SpotActionKind.check || SpotActionKind.call => 1,
+        SpotActionKind.raise || SpotActionKind.allIn => 2,
+      };
+  final mine = [0.0, 0.0, 0.0], gto = [0.0, 0.0, 0.0];
+  for (var i = 0; i < spot.actions.length; i++) {
+    mine[group(spot.actions[i])] += mix[i];
+    gto[group(spot.actions[i])] += spot.frequencies[i];
+  }
+  var over = 0, under = 0;
+  for (var g = 1; g < 3; g++) {
+    if (mine[g] - gto[g] > mine[over] - gto[over]) over = g;
+    if (gto[g] - mine[g] > gto[under] - mine[under]) under = g;
+  }
+  // GTO's most common choice in a group.
+  int? favorite(int g) {
+    int? best;
+    for (var i = 0; i < spot.actions.length; i++) {
+      if (group(spot.actions[i]) != g || spot.frequencies[i] <= 0) continue;
+      if (best == null || spot.frequencies[i] > spot.frequencies[best]) best = i;
+    }
+    return best;
+  }
+
+  // The best EV in each group (null if none is allowed), and what the
+  // user's mix gives up against GTO's in the choice and in the size.
+  final groupBest = List<double?>.filled(3, null);
+  for (var i = 0; i < spot.actions.length; i++) {
+    final ev = spot.evs[i], g = group(spot.actions[i]);
+    if (!ev.isNaN && (groupBest[g] == null || ev > groupBest[g]!)) groupBest[g] = ev;
+  }
+  final best = groupBest.whereType<double>().fold(double.negativeInfinity, max);
+  double choiceCost(List<double> shares) =>
+      [for (var g = 0; g < 3; g++) if (groupBest[g] != null) shares[g] * (best - groupBest[g]!)].fold(0.0, (a, b) => a + b);
+  double sizeCost(List<double> of) => [
+        for (var i = 0; i < spot.actions.length; i++)
+          if (group(spot.actions[i]) == 2 && !spot.evs[i].isNaN) of[i] * (groupBest[2]! - spot.evs[i]),
+      ].fold(0.0, (a, b) => a + b);
+  final choice = choiceCost(mine) - choiceCost(gto);
+  final size = sizeCost(mix) - sizeCost(spot.frequencies);
+  if (size > choice || mine[over] - gto[over] < 1e-9) {
+    final raise = favorite(2);
+    return raise == null ? null : (MistakeKind.wrongSize, raise);
+  }
+  final instead = favorite(under);
+  if (instead == null) return null;
+  final kind = switch ((over, under)) {
+    (0, _) => MistakeKind.tooTight,
+    (1, 0) => MistakeKind.tooLoose,
+    (1, _) => MistakeKind.tooPassive,
+    _ => MistakeKind.tooAggressive,
+  };
+  return (kind, instead);
+}
+
 DecisionScore scoreDecision(SpotStrategy spot, List<double> user) {
   assert(user.length == spot.actions.length);
   final actions = spot.actions, gto = spot.frequencies, evs = spot.evs;
@@ -193,15 +279,20 @@ DecisionScore scoreDecision(SpotStrategy spot, List<double> user) {
   final (gtoChoice, gtoSize) = losses(gto);
   // Each part on its own, so noise in GTO's sizes can't hide a worse choice.
   final choiceLoss = max(0.0, userChoice - gtoChoice), sizeLoss = max(0.0, userSize - gtoSize);
+  // The mix is compared with GTO's rounded to whole percents, as the user
+  // sets it (and as Show GTO fills it in): matching that is a perfect match.
+  final roundedGroups = [for (final p in splitWhole(gtoGroups, 100)) p / 100];
   var choiceDifference = 0.0;
   for (var g = 0; g < 3; g++) {
-    choiceDifference += (userGroups[g] - gtoGroups[g]).abs();
+    choiceDifference += (userGroups[g] - roundedGroups[g]).abs();
   }
   // How the raises are split between sizes, when both raise.
   var sizeDifference = 0.0;
   if (userGroups[2] > 1e-9 && gtoGroups[2] > 1e-9) {
-    for (var i = 0; i < user.length; i++) {
-      if (group(i) == 2) sizeDifference += (user[i] / userGroups[2] - gto[i] / gtoGroups[2]).abs();
+    final raises = [for (var i = 0; i < user.length; i++) if (group(i) == 2) i];
+    final roundedSizes = splitWhole([for (final i in raises) gto[i]], 100);
+    for (var k = 0; k < raises.length; k++) {
+      sizeDifference += (user[raises[k]] / userGroups[2] - roundedSizes[k] / 100).abs();
     }
   }
   final match = (1 - sizeWeight) * (1 - choiceDifference / 2) + sizeWeight * (1 - sizeDifference / 2);

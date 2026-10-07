@@ -15,15 +15,47 @@ import 'message_queue.dart';
 import 'postflop/postflop_tree.dart';
 import 'preflop/preflop_tree.dart';
 
-/// The worker's script. On the page: lib/solver_worker.dart compiled next
-/// to the app by tool/build_web.dart, with the build number so browsers
-/// don't use a copy cached from an older build. In a worker: its own
-/// script, so the workers it starts run the same build.
-String get _scriptUrl {
-  if (!globalContext.has('window')) return (globalContext as web.WorkerGlobalScope).location.href;
-  const build = String.fromEnvironment('SOLVER_WORKER_BUILD');
-  return build.isEmpty ? 'solver_worker.js' : 'solver_worker.js?build=$build';
+/// Whether this code was compiled to WebAssembly (else to JavaScript).
+const _wasm = bool.fromEnvironment('dart.tool.dart2wasm');
+
+/// The worker's scripts: lib/solver_worker.dart compiled next to the app by
+/// tool/build_web.dart, to WebAssembly (a module script starts it) and to
+/// JavaScript for browsers that can't run that.
+enum _Script {
+  wasm('solver_worker_wasm.js', 'module'),
+  js('solver_worker.js', 'classic');
+
+  const _Script(this.file, this.type);
+
+  final String file;
+  final String type;
+
+  /// With the build number, so browsers don't use a copy cached from an older build.
+  String get url {
+    const build = String.fromEnvironment('SOLVER_WORKER_BUILD');
+    return build.isEmpty ? file : '$file?build=$build';
+  }
 }
+
+extension SolverArray on JSFloat64Array {
+  /// [toDart] for numbers a solver reads over and over. In WebAssembly,
+  /// [toDart] leaves the array in JavaScript, where every read is a call
+  /// out of WebAssembly (preflop solves took 1.4 times as long), so it is
+  /// copied in. In JavaScript nothing changes.
+  Float64List get toSolver {
+    final list = toDart;
+    return _wasm ? (Float64List(list.length)..setAll(0, list)) : list;
+  }
+}
+
+extension on JSTypedArray {
+  external JSArrayBuffer get buffer;
+}
+
+/// What to hand over with a message holding [arrays] (made by `toJS`):
+/// their memory, instead of copying it. Each must be a fresh array, or one
+/// the sender no longer uses (in JavaScript `toJS` is the Dart list itself).
+List<JSObject> transferOf(List<JSTypedArray> arrays) => [for (final a in arrays) a.buffer];
 
 /// A message to a solver worker. [kind] says which fields it has:
 /// - `preflop`: solve a whole game ([spec], [iterations], [threads],
@@ -113,8 +145,8 @@ extension type SolverRequest._(JSObject _) implements JSObject {
   PostflopSpec get postflopSpec => PostflopSpec.fromJson(jsonDecode(spec) as Map<String, Object?>);
 
   BranchJob get branchJob => switch (kind) {
-        'preflopBranches' => PreflopBranchJob(preflopSpec, equity.toDart, roots.toDart),
-        _ => PostflopBranchJob(postflopSpec, [for (final r in ranges.toDart) r.toDart], roots.toDart),
+        'preflopBranches' => PreflopBranchJob(preflopSpec, equity.toSolver, roots.toDart),
+        _ => PostflopBranchJob(postflopSpec, [for (final r in ranges.toDart) r.toSolver], roots.toDart),
       };
 }
 
@@ -147,25 +179,45 @@ extension type SolverReply._(JSObject _) implements JSObject {
 
 /// A Web Worker running lib/solver_worker.dart.
 class SolverWorker {
-  SolverWorker._(this._worker, this._events);
+  SolverWorker._(this._worker, this._events, {required this.wasm});
 
   final web.Worker _worker;
   final MessageQueue _events;
 
-  /// Cleared once a worker couldn't be used: the page has no worker
-  /// script (`flutter run` doesn't build it) or can't run it.
-  static bool _available = true;
+  /// Whether it runs the WebAssembly build.
+  final bool wasm;
 
-  static void disable() => _available = false;
+  /// The scripts a page still tries, fastest first. One is dropped once
+  /// it couldn't be used: the page doesn't have it (`flutter run` doesn't
+  /// build the worker) or can't run it (no WasmGC).
+  static final _scripts = [_Script.wasm, _Script.js];
+
+  static void disable() => _scripts.clear();
+
+  /// Uses the JavaScript build from now on.
+  static void disableWasm() => _scripts.remove(_Script.wasm);
 
   /// Starts a worker, or returns null when there is none to use.
   static Future<SolverWorker?> start() async {
-    if (!_available) return null;
+    // In a worker: its own script, so the workers it starts run the same build.
+    if (!globalContext.has('window')) {
+      final self = (globalContext as web.WorkerGlobalScope).location.href;
+      return _start(self, _wasm ? _Script.wasm : _Script.js);
+    }
+    while (_scripts.isNotEmpty) {
+      final script = _scripts.first;
+      final worker = await _start(script.url, script);
+      if (worker != null) return worker;
+      _scripts.remove(script);
+    }
+    return null;
+  }
+
+  static Future<SolverWorker?> _start(String url, _Script script) async {
     final web.Worker worker;
     try {
-      worker = web.Worker(_scriptUrl.toJS);
+      worker = web.Worker(url.toJS, web.WorkerOptions(type: script.type));
     } on Object {
-      _available = false;
       return null;
     }
     final events = StreamController<_Event>();
@@ -177,10 +229,9 @@ class SolverWorker {
     // It says it's ready as soon as it runs: failing first means it can't.
     if (await queue.next is! _Reply) {
       worker.terminate();
-      _available = false;
       return null;
     }
-    return SolverWorker._(worker, queue);
+    return SolverWorker._(worker, queue, wasm: script == _Script.wasm);
   }
 
   /// [transfer]: buffers handed over instead of copied.

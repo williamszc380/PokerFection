@@ -2,28 +2,22 @@ import '../engine/actions.dart';
 import '../engine/events.dart';
 import '../engine/poker_hand.dart';
 import 'postflop/postflop_tree.dart';
-import 'preflop/preflop_tree.dart';
+import 'raise_sizes.dart';
 import 'spot_strategy.dart';
 
-/// The user's choices at their decision: fold, check or call, each size of
-/// their menu, all-in. Sizes bigger than the player's whole stack are left
-/// out; other choices not allowed here stay in the list, marked unavailable
-/// with the reason (greyed out), so the buttons move around as little as
-/// possible.
+/// The user's choices at their decision: fold, check or call, each raise
+/// size, all-in. The sizes follow one rule before and after the flop (see
+/// [raiseSizes]): every Fibonacci number of big blinds (1, 2, 3, 5, 8, ...
+/// BB) from the min-raise up to all-in. Choices not allowed here stay in the list,
+/// marked unavailable with the reason (greyed out).
 ///
-/// Before the flop the sizes are multiples of the bet faced (2x means a
-/// raise to 2 BB when first in); after it, shares of the pot (for a raise,
-/// of the pot after calling).
-List<SpotAction> actionMenu(
-  PokerHand hand, {
-  required List<double> preflopSizes,
-  required List<double> postflopSizes,
-}) {
+/// Before the flop each size also shows as a multiple of the bet faced
+/// (first in, of the big blind); after it, as a share of the pot (for a
+/// raise, of the pot after calling).
+List<SpotAction> actionMenu(PokerHand hand) {
   final legal = hand.legalActions();
   final preflop = hand.street == Street.preflop;
-  final betting = legal.isBet;
-  // Same cut-off as the solved games, whose menus must match this one.
-  final nearlyAllIn = preflop ? const PreflopSettings().nearlyAllIn : PostflopSpec.nearlyAllIn;
+  final seat = hand.toAct!;
   final actions = <SpotAction>[
     SpotAction(
       kind: SpotActionKind.fold,
@@ -35,32 +29,23 @@ List<SpotAction> actionMenu(
         ? const SpotAction(kind: SpotActionKind.check, amount: 0, action: PlayerAction.check())
         : SpotAction(kind: SpotActionKind.call, amount: legal.toCall, action: const PlayerAction.call()),
   ];
-  final seen = <int>{};
-  for (final size in preflop ? preflopSizes : postflopSizes) {
-    final to = preflop
-        ? PreflopTree.raiseSize(legal.currentBet, size)
-        : PostflopTree.sizeTo(legal.currentBet, legal.streetBet, legal.pot, size, hand.bigBlind);
-    // More than the player has: not shown at all (all-in covers it).
-    if (to >= legal.maxRaiseTo) continue;
-    final Unavailable? reason;
-    if (!legal.canRaise) {
-      reason = Unavailable.raisingNotAllowed;
-    } else if (to < legal.minRaiseTo) {
-      reason = betting ? Unavailable.belowMinBet : Unavailable.belowMinRaise;
-    } else if (to >= legal.maxRaiseTo * nearlyAllIn) {
-      reason = Unavailable.nearlyAllIn;
-    } else if (!seen.add(to)) {
-      reason = Unavailable.sameAmount;
-    } else {
-      reason = null;
-    }
+  // Same sizes as the solved games, whose menus must match this one.
+  final sizes = raiseSizes(
+    minTo: legal.minRaiseTo,
+    allInTo: coveredAllIn(legal.maxRaiseTo, [
+      for (var s = 0; s < hand.playerCount; s++)
+        if (s != seat && !hand.isFolded(s)) hand.streetBetOf(s) + hand.stackOf(s),
+    ]),
+    bigBlind: hand.bigBlind,
+  );
+  for (final to in sizes) {
     actions.add(SpotAction(
       kind: SpotActionKind.raise,
       amount: to,
-      action: PlayerAction.raiseTo(to.clamp(legal.minRaiseTo, legal.maxRaiseTo)),
-      multiple: preflop ? size : null,
-      potShare: preflop ? null : size,
-      unavailable: reason,
+      action: PlayerAction.raiseTo(to),
+      multiple: preflop ? to / legal.currentBet : null,
+      potShare: preflop ? null : PostflopTree.potShareOf(to, legal.currentBet, legal.streetBet, legal.pot),
+      unavailable: legal.canRaise ? null : Unavailable.raisingNotAllowed,
     ));
   }
   actions.add(SpotAction(

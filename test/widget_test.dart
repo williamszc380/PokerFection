@@ -1,10 +1,15 @@
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pokerfection/main.dart';
 import 'package:pokerfection/src/app/app_settings.dart';
+import 'package:pokerfection/src/bots/bot.dart';
+import 'package:pokerfection/src/engine/events.dart';
+import 'package:pokerfection/src/engine/positions.dart';
+import 'package:pokerfection/src/game/pre_action.dart';
 import 'package:pokerfection/src/game/table_session.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_equity.dart';
 import 'package:pokerfection/src/gto/gto_solutions.dart';
@@ -14,12 +19,22 @@ import 'package:pokerfection/src/ui/history_screen.dart';
 import 'package:pokerfection/src/ui/range_screen.dart';
 import 'package:pokerfection/src/ui/table_screen.dart';
 import 'package:pokerfection/src/ui/widgets/card_view.dart';
+import 'package:pokerfection/src/ui/widgets/mix_slider.dart';
 import 'package:pokerfection/src/ui/widgets/logo.dart';
 
 /// Makes the user's decision if it's their turn: check or call by default
 /// (ticked), or fold when [call] is false and folding is allowed. Returns
 /// true if it acted.
 Future<bool> actIfAsked(WidgetTester tester, {required bool call}) async {
+  // The buttons (Free Play, and simple training).
+  final quickCall = find.byKey(const ValueKey('quick call'));
+  if (quickCall.evaluate().isNotEmpty) {
+    final fold = find.byKey(const ValueKey('quick fold'));
+    // Fold is greyed out when checking is free: then check.
+    final canFold = tester.widget<FilledButton>(fold).onPressed != null;
+    await tester.tap(!call && canFold ? fold : quickCall);
+    return true;
+  }
   final play = find.byKey(const ValueKey('play'));
   if (play.evaluate().isEmpty) return false;
   // A greyed-out fold (checking is free) ignores the tap.
@@ -57,6 +72,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Play'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Solo'));
+    await tester.pumpAndSettle();
     expect(find.text('GTO Training'), findsOneWidget);
     expect(find.text('Rotate'), findsOneWidget);
     await tester.tap(find.text('Customize Opponents'));
@@ -65,9 +82,7 @@ void main() {
     expect(find.text('100 BB'), findsWidgets);
     await tester.scrollUntilVisible(find.text('Min-Raise'), 200, scrollable: find.byType(Scrollable).first);
     expect(find.text('1 BB (House Rule)'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('Bet Sizes'), 200, scrollable: find.byType(Scrollable).first);
-    expect(find.text('2.5×'), findsOneWidget);
-    expect(find.text('0.5× pot'), findsOneWidget);
+    expect(find.text('Bet Sizes'), findsNothing, reason: 'the sizes follow one rule now');
     await tester.scrollUntilVisible(find.text('Start'), 200, scrollable: find.byType(Scrollable).first);
     expect(find.text('Start'), findsOneWidget);
   });
@@ -75,6 +90,8 @@ void main() {
   testWidgets('preflop charts: pick a table, a position and a spot, tap a hand', (tester) async {
     setScreen(tester, const Size(1280, 720));
     await tester.pumpWidget(PokerFectionApp(settings: AppSettings()));
+    await tester.tap(find.text('Guides'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Preflop Charts'));
     await tester.pumpAndSettle();
     expect(find.byType(ChartGrid), findsOneWidget);
@@ -109,7 +126,7 @@ void main() {
         if (find.text('Next Hand').evaluate().isNotEmpty) break;
         final play = find.byKey(const ValueKey('play'));
         // Percentages to set: a decision with a GTO answer.
-        if (play.evaluate().isNotEmpty && find.byType(Slider).evaluate().isNotEmpty) {
+        if (play.evaluate().isNotEmpty && find.byType(MixSlider).evaluate().isNotEmpty) {
           await tester.tap(play);
           await tester.pumpAndSettle();
           expect(find.textContaining('Score '), findsOneWidget);
@@ -129,19 +146,22 @@ void main() {
 
   testWidgets('simple training: just play, GTO shows after mistakes, each play is scored', (tester) async {
     setScreen(tester, const Size(1280, 900));
+    // The same cards every run (some deals have no fold that is a mistake).
+    final controller = TableController(
+      TableConfig.quick(playerCount: 2, stackBb: 20, guessGto: true),
+      speed: PlaybackSpeed.instant,
+      random: Random(2),
+      solutions: testSolutions(),
+    );
     await tester.pumpWidget(MaterialApp(
-      home: TableScreen(
-        config: TableConfig.quick(playerCount: 2, stackBb: 20, guessGto: true),
-        speed: PlaybackSpeed.instant,
-        solutions: testSolutions(),
-      ),
+      home: TableScreen(config: controller.session.config, controller: controller),
     ));
     var decisions = 0, shown = 0;
     for (var hand = 0; hand < 6; hand++) {
       for (var step = 0; step < 40; step++) {
         await tester.pumpAndSettle();
         if (find.text('Next Hand').evaluate().isNotEmpty) break;
-        expect(find.byType(Slider), findsNothing, reason: 'no percentages to set');
+        expect(find.byType(MixSlider), findsNothing, reason: 'no percentages to set');
         final cont = find.byKey(const ValueKey('continue'));
         if (cont.evaluate().isNotEmpty) {
           // A mistake or blunder: GTO's answer, with the play's grade and score.
@@ -162,24 +182,6 @@ void main() {
     // Each hand's score in the strip, and the average.
     expect(find.text('Avg'), findsOneWidget);
     expect(find.descendant(of: find.byType(RecentScores), matching: find.textContaining(RegExp(r'^\d+$'))), findsWidgets);
-    // Advanced from the next hand on, from the menu.
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Advanced'));
-    await tester.pumpAndSettle();
-    for (var step = 0; step < 40; step++) {
-      await tester.pumpAndSettle();
-      if (find.byType(Slider).evaluate().isNotEmpty) break;
-      final cont = find.byKey(const ValueKey('continue'));
-      if (cont.evaluate().isNotEmpty) {
-        await tester.tap(cont);
-      } else if (find.text('Next Hand').evaluate().isNotEmpty) {
-        await tester.tap(find.text('Next Hand'));
-      } else {
-        await actIfAsked(tester, call: true);
-      }
-    }
-    expect(find.byType(Slider), findsWidgets);
   });
 
   testWidgets('a click on a seat shows the range; the players are edited from the menu', (tester) async {
@@ -207,7 +209,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Players'));
+    await tester.tap(find.text('Edit Table'));
     await tester.pumpAndSettle();
     expect(find.text('Player'), findsWidgets);
     // One show/hide cards button per opponent.
@@ -281,19 +283,16 @@ void main() {
     }
     await tester.tap(show);
     await tester.pumpAndSettle();
-    expect(tester.widget<OutlinedButton>(show).onPressed, isNull, reason: "GTO's answer is showing");
     // Each choice's EV loss shows too, the best one at 0.00.
     expect(find.text('EV Loss'), findsOneWidget);
     expect(find.text('0.00'), findsWidgets);
-    // Changing the percentages makes it pressable again, to go back to GTO's answer.
-    final sliders = find.byType(Slider);
-    await tester.drag(sliders.at(1), const Offset(-60, 0));
-    await tester.drag(sliders.at(0), const Offset(60, 0));
-    await tester.pumpAndSettle();
-    expect(tester.widget<OutlinedButton>(show).onPressed, isNotNull);
+    // A toggle: off puts the user's own percentages back, on fills in GTO's again.
     await tester.tap(show);
     await tester.pumpAndSettle();
-    expect(tester.widget<OutlinedButton>(show).onPressed, isNull);
+    expect(find.text('EV Loss'), findsNothing);
+    await tester.tap(show);
+    await tester.pumpAndSettle();
+    expect(find.text('EV Loss'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('play')));
     await tester.pumpAndSettle();
     // Scored like any decision: GTO's own mix gets (about) 100.
@@ -336,6 +335,44 @@ void main() {
       }
     }
     expect(finished, isTrue);
+    // Leave the table and let any remaining timers run out.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 5));
+  });
+
+  testWidgets("a pre-action ticked while a bot acts is played at the user's turn", (tester) async {
+    setScreen(tester, const Size(1280, 800));
+    // Heads-up in the big blind: the bot acts first before the flop.
+    final controller = TableController(
+      TableConfig.quick(playerCount: 2, heroPosition: Position.bb, opponentStyle: BotStyle.station),
+      random: Random(1),
+    );
+    await tester.pumpWidget(MaterialApp(
+      home: TableScreen(config: controller.session.config, controller: controller),
+    ));
+    final callAny = find.byKey(const ValueKey('pre callAny'));
+    final quickCall = find.byKey(const ValueKey('quick call'));
+    ActionTaken? firstMove() =>
+        controller.hand?.log.whereType<ActionTaken>().where((a) => a.seat == TableSession.heroSeat).firstOrNull;
+    var ticked = false;
+    for (var tick = 0; tick < 2000 && firstMove() == null; tick++) {
+      await tester.pump(const Duration(milliseconds: 50));
+      if (find.text('Next Hand').evaluate().isNotEmpty) {
+        // The bot folded first: the next hand.
+        ticked = false;
+        await tester.tap(find.text('Next Hand'));
+      } else if (!ticked && callAny.evaluate().isNotEmpty) {
+        await tester.tap(callAny);
+        await tester.pump();
+        expect(controller.preAction?.kind, PreAction.callAny);
+        ticked = true;
+      } else if (ticked) {
+        // The user's turn doesn't wait for them.
+        expect(quickCall, findsNothing);
+      }
+    }
+    expect(ticked, isTrue);
+    expect(firstMove()?.kind, anyOf(ActionKind.call, ActionKind.check));
     // Leave the table and let any remaining timers run out.
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 5));

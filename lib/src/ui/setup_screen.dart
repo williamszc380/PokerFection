@@ -7,8 +7,6 @@ import '../bots/bot.dart';
 import '../engine/positions.dart';
 import '../engine/rules.dart';
 import '../game/table_session.dart';
-import '../gto/postflop/postflop_tree.dart';
-import '../gto/preflop/preflop_tree.dart';
 import '../l10n/strings.dart';
 import 'format.dart';
 import 'glossary.dart';
@@ -43,8 +41,6 @@ class _SetupScreenState extends State<SetupScreen> {
   int _ante = 0;
   RaiseRule _raiseRule = RaiseRule.standard;
   bool _resetStacks = false;
-  List<double> _preflopSizes = PreflopSettings.defaultRaiseMultiples;
-  List<double> _postflopSizes = PostflopSpec.defaultHeroSizes;
   bool _showStyles = false;
   bool _showHands = false;
 
@@ -97,8 +93,6 @@ class _SetupScreenState extends State<SetupScreen> {
       ante: _ante,
       raiseRule: _raiseRule,
       resetStacksEachHand: _resetStacks,
-      preflopSizes: _preflopSizes,
-      postflopSizes: _postflopSizes,
       guessGto: _training,
       advanced: _advanced,
       showStyles: _showStyles,
@@ -198,11 +192,6 @@ class _SetupScreenState extends State<SetupScreen> {
               ),
               const SizedBox(height: 8),
               _switch(s.resetStacks, _resetStacks, (v) => _resetStacks = v),
-              _Section(
-                title: s.betSizes,
-                help: const HelpButton(section: GlossarySection.amounts, terms: [GlossaryTerm.betSizes]),
-                child: _betSizes(context, s),
-              ),
               // The rules of the game.
               const Padding(padding: EdgeInsets.only(top: 20), child: _DashedLine()),
               _Section(
@@ -231,114 +220,6 @@ class _SetupScreenState extends State<SetupScreen> {
         value: value,
         onChanged: (v) => setState(() => set(v)),
       );
-
-  /// Both size menus, editable: × drops a size, "Add" asks for a new one.
-  Widget _betSizes(BuildContext context, S s) {
-    final theme = Theme.of(context);
-    Widget menu({
-      required String title,
-      required List<double> sizes,
-      required String Function(double size) label,
-      required Future<double?> Function() ask,
-      required ValueChanged<List<double>> onChanged,
-    }) =>
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: theme.textTheme.labelLarge),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final size in sizes)
-                  InputChip(
-                    label: Text(label(size)),
-                    onDeleted: sizes.length > 1 ? () => onChanged([...sizes]..remove(size)) : null,
-                  ),
-                if (sizes.length < 6)
-                  ActionChip(
-                    avatar: const Icon(Icons.add, size: 18),
-                    label: Text(s.add),
-                    onPressed: () async {
-                      final size = await ask();
-                      if (size != null && !sizes.contains(size)) onChanged([...sizes, size]..sort());
-                    },
-                  ),
-              ],
-            ),
-          ],
-        );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        menu(
-          title: s.preflop,
-          sizes: _preflopSizes,
-          label: s.multiple,
-          ask: () => _askSize(context, s, s.preflopSizePrompt, suffix: '×', min: 1.25, max: 20),
-          onChanged: (sizes) => setState(() => _preflopSizes = sizes),
-        ),
-        const SizedBox(height: 12),
-        menu(
-          title: s.postflop,
-          sizes: _postflopSizes,
-          label: s.potShare,
-          ask: () => _askSize(context, s, s.postflopSizePrompt, suffix: '× ${s.potWord}', min: 0.05, max: 5),
-          onChanged: (sizes) => setState(() => _postflopSizes = sizes),
-        ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(
-            onPressed: () => setState(() {
-              _preflopSizes = PreflopSettings.defaultRaiseMultiples;
-              _postflopSizes = PostflopSpec.defaultHeroSizes;
-            }),
-            child: Text(s.resetDefaults),
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Asks for a number between [min] and [max]; null if cancelled.
-  Future<double?> _askSize(BuildContext context, S s, String title,
-      {required String suffix, required double min, required double max}) {
-    final text = TextEditingController();
-    final answer = showDialog<double>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final value = double.tryParse(text.text.trim().replaceAll(',', '.'));
-          final valid = value != null && value >= min && value <= max;
-          void done() {
-            if (valid) Navigator.of(context).pop((value * 100).round() / 100);
-          }
-
-          return AlertDialog(
-            title: Text(title),
-            content: TextField(
-              controller: text,
-              autofocus: true,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                suffixText: suffix,
-                helperText: s.between(S.number(min), S.number(max)),
-              ),
-              onChanged: (_) => setDialogState(() {}),
-              onSubmitted: (_) => done(),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(s.cancel)),
-              FilledButton(onPressed: valid ? done : null, child: Text(s.add)),
-            ],
-          );
-        },
-      ),
-    );
-    return answer;
-  }
 
   Widget _rules(BuildContext context, S s) {
     final theme = Theme.of(context);

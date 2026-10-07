@@ -2,6 +2,7 @@ import 'dart:math';
 
 import '../../engine/rules.dart';
 import '../hand_classes.dart';
+import '../raise_sizes.dart';
 
 /// Stacks and blinds for one preflop game.
 ///
@@ -15,11 +16,9 @@ class PreflopSpec {
     this.bigBlind = 100,
     this.ante = 0,
     this.raiseRule = RaiseRule.standard,
-    List<double> raiseMultiples = PreflopSettings.defaultRaiseMultiples,
     List<PreflopAction> history = const [],
     this.hero = -1,
   })  : stacks = List.unmodifiable(stacks),
-        raiseMultiples = List.unmodifiable(raiseMultiples),
         history = List.unmodifiable(history) {
     if (stacks.length < 2 || stacks.length > 8) throw ArgumentError('2 to 8 players');
     if (hero < -1 || hero >= stacks.length) throw ArgumentError('No such player: $hero');
@@ -31,18 +30,13 @@ class PreflopSpec {
   final int ante;
   final RaiseRule raiseRule;
 
-  /// The user's raise sizes, as multiples of the bet they face. By default
-  /// 2x, 2.5x, 3x, 4x, 6x, 10x and 15x: first in, a raise to 2 to 15 BB;
-  /// against an open or a 3-bet, 2x to 15x it.
-  final List<double> raiseMultiples;
-
   /// Actions already taken before the solved part starts. Empty for the
   /// whole game; otherwise this is a subgame starting at [hero]'s decision.
   final List<PreflopAction> history;
 
   /// The user's player in a subgame: at the first decision they may take
   /// every legal action (fold when facing a bet, check or call, each size of
-  /// [raiseMultiples], all-in). Everyone else, and the user later on,
+  /// [raiseSizes], all-in). Everyone else, and the user later on,
   /// choose from a smaller menu, which keeps the game small enough to
   /// solve. The subgame ends when the user folds. -1 for the whole game.
   final int hero;
@@ -52,7 +46,7 @@ class PreflopSpec {
   int get bigBlindPlayer => players - 1;
 
   String get key => '${stacks.join(',')}/$smallBlind/$bigBlind/$ante/${raiseRule.name}'
-      '${hero < 0 ? '' : '/$hero/${raiseMultiples.join(',')}/${history.join(',')}'}';
+      '${hero < 0 ? '' : '/$hero/${history.join(',')}'}';
 
   /// For sending to the web version's solver worker (lib/solver_worker.dart),
   /// which rebuilds the spec from it: every field belongs here.
@@ -62,7 +56,6 @@ class PreflopSpec {
         'bigBlind': bigBlind,
         'ante': ante,
         'raiseRule': raiseRule.name,
-        'raiseMultiples': raiseMultiples,
         'history': [for (final a in history) [a.move.name, a.raiseTo]],
         'hero': hero,
       };
@@ -75,7 +68,6 @@ class PreflopSpec {
       bigBlind: integer('bigBlind'),
       ante: integer('ante'),
       raiseRule: RaiseRule.values.byName(json['raiseRule'] as String),
-      raiseMultiples: [for (final m in json['raiseMultiples'] as List) (m as num).toDouble()],
       history: [
         for (final a in json['history'] as List)
           PreflopAction(PreflopMove.values.byName((a as List)[0] as String), (a[1] as num).toInt()),
@@ -93,12 +85,11 @@ class PreflopSpec {
 
 /// Which bets the solver considers, and how it values seeing a flop.
 ///
-/// The user's player ([PreflopSpec.hero]) gets every size of
-/// [PreflopSpec.raiseMultiples]. Bots get one size per situation plus
-/// all-in, which is standard: every extra size multiplies the work.
+/// The user's player ([PreflopSpec.hero]) gets every size of [raiseSizes].
+/// Bots get one size per situation (to 0.5 BB) plus all-in, which is
+/// standard: every extra size multiplies the work.
 class PreflopSettings {
   const PreflopSettings({
-    this.nearlyAllIn = 0.9,
     this.openBb = 2.5,
     this.shortOpenBb = 2.0,
     this.smallBlindOpenBb = 3.0,
@@ -112,12 +103,6 @@ class PreflopSettings {
     this.positionEdge = 0.3,
     this.pushFoldOnly = false,
   });
-
-  static const defaultRaiseMultiples = [2.0, 2.5, 3.0, 4.0, 6.0, 10.0, 15.0];
-
-  /// A raise to at least this share of the player's whole stack is left
-  /// out: it is practically all-in, and the all-in choice covers it.
-  final double nearlyAllIn;
 
   /// Bots' opening raise, in big blinds (stacks deeper than
   /// [shortStackBb]), plus 1 BB for every limper.
@@ -259,9 +244,6 @@ class PreflopTree {
     return node;
   }
 
-  /// The raise to [multiple] times [currentBet], to the chip (0.01 BB).
-  static int raiseSize(int currentBet, double multiple) => (currentBet * multiple).round();
-
   List<PreflopAction> _options(_State s, int p, {required bool fullMenu}) {
     final bb = spec.bigBlind;
     final toCall = s.currentBet - s.bet[p];
@@ -273,15 +255,20 @@ class PreflopTree {
         (!s.acted[p] || toCall >= s.fullRaise);
     if (fullMenu) {
       // Every legal choice: fold (only when facing a bet), check or call,
-      // each raise size (below the min-raise isn't allowed; nearly all-in
-      // is covered by all-in), all-in.
+      // each raise size (2, 3, 5, 8, ... BB), all-in.
       return [
         if (toCall > 0) const PreflopAction(PreflopMove.fold),
         PreflopAction(toCall == 0 ? PreflopMove.check : PreflopMove.call),
         if (canRaise) ...[
-          for (final to in {for (final m in spec.raiseMultiples) raiseSize(s.currentBet, m)})
-            if (to >= s.currentBet + s.fullRaise && to < allInTo * settings.nearlyAllIn)
-              PreflopAction(PreflopMove.raise, to),
+          for (final to in raiseSizes(
+            minTo: s.currentBet + s.fullRaise,
+            allInTo: coveredAllIn(allInTo, [
+              for (var q = 0; q < spec.players; q++)
+                if (q != p && !s.folded[q]) s.bet[q] + s.remaining(q),
+            ]),
+            bigBlind: bb,
+          ))
+            PreflopAction(PreflopMove.raise, to),
           PreflopAction(PreflopMove.allIn, allInTo),
         ],
       ];
@@ -295,7 +282,7 @@ class PreflopTree {
     void checkOrCall() => options.add(PreflopAction(toCall == 0 ? PreflopMove.check : PreflopMove.call));
 
     void raiseTo(double amount) {
-      final to = amount.round();
+      final to = roundToHalfBb(amount, bb);
       if (!canRaise || settings.pushFoldOnly) return;
       if (to < s.currentBet + s.fullRaise || to >= allInTo) return;
       if (s.contrib[p] - s.bet[p] + to > settings.maxCommit * effective) return;

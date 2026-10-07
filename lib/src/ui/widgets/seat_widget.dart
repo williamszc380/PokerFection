@@ -7,6 +7,7 @@ import '../format.dart';
 import '../table_geometry.dart';
 import '../table_view_state.dart';
 import 'card_view.dart';
+import 'turn_clock.dart';
 
 /// One player at the table: cards on top, name and stack below, and a label
 /// for their last action. Its info box is centered on [TableGeometry.seat].
@@ -31,6 +32,8 @@ class SeatWidget extends StatelessWidget {
     required this.isHero,
     this.showStyle = false,
     this.hovered = false,
+    this.turnEnds,
+    this.turnLimit,
   });
 
   final SeatView seat;
@@ -43,6 +46,11 @@ class SeatWidget extends StatelessWidget {
 
   /// The mouse is over the seat (which can be clicked): light it up.
   final bool hovered;
+
+  /// Online, while this player acts with a time limit: when it runs out,
+  /// and the whole time (a ring counts down by the info box).
+  final DateTime? turnEnds;
+  final Duration? turnLimit;
 
   /// Total size of the widget; the table uses it to position the seat.
   static Size sizeFor(TableGeometry g) => Size(
@@ -91,7 +99,7 @@ class SeatWidget extends StatelessWidget {
             top: g.seatCardsAbove,
             child: AnimatedOpacity(
               duration: const Duration(milliseconds: 250),
-              opacity: seat.folded ? 0.45 : 1,
+              opacity: seat.folded || seat.out || seat.sittingOut ? 0.45 : 1,
               child: _infoBox(context, box),
             ),
           ),
@@ -99,6 +107,12 @@ class SeatWidget extends StatelessWidget {
             Positioned(
               top: g.seatCardsAbove + box.height - g.pillHeight / 2,
               child: label,
+            ),
+          if (isActing && turnEnds != null && turnLimit != null)
+            Positioned(
+              top: g.seatCardsAbove - 9 * g.scale,
+              right: 0,
+              child: TurnClock.ring(ends: turnEnds!, limit: turnLimit!, size: 24 * g.scale),
             ),
         ],
       ),
@@ -145,6 +159,18 @@ class SeatWidget extends StatelessWidget {
 
   Widget _infoLines(S s, BotStyle? style) {
     final g = geometry;
+    // Online: who is away or left, who comes or goes next hand, who sits out, and which seats bots play.
+    final badge = !seat.connected
+        ? s.leftBadge
+        : seat.away
+            ? s.awayBadge
+            : seat.leavingNextHand
+                ? s.leavingBadge
+                : seat.sittingOut
+                    ? s.sittingOutBadge
+                    : seat.joiningNextHand
+                        ? s.nextHandBadge
+                        : (seat.info.isBot ? s.botBadge : null);
     return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -178,10 +204,11 @@ class SeatWidget extends StatelessWidget {
               ],
             ],
           ),
+          // Online, out of chips: "Out" for the stack.
           Text(
-            seat.allIn && seat.stack == 0 ? s.allInBadge : formatBb(seat.stack, unit: true),
+            seat.out ? s.outBadge : (seat.allIn && seat.stack == 0 ? s.allInBadge : formatBb(seat.stack, unit: true)),
             style: TextStyle(
-              color: seat.allIn && seat.stack == 0 ? const Color(0xFFFF8A65) : Colors.white,
+              color: seat.out || (seat.allIn && seat.stack == 0) ? const Color(0xFFFF8A65) : Colors.white,
               fontSize: 12.5 * g.scale,
               fontWeight: FontWeight.w500,
             ),
@@ -190,6 +217,14 @@ class SeatWidget extends StatelessWidget {
             Text(
               s.style(style),
               style: TextStyle(color: Colors.white38, fontSize: 9 * g.scale),
+            )
+          else if (badge != null)
+            Text(
+              badge,
+              style: TextStyle(
+                color: seat.connected ? Colors.white38 : const Color(0xFFFF8A65),
+                fontSize: 9 * g.scale,
+              ),
             ),
         ],
     );

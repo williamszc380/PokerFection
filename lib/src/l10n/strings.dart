@@ -6,19 +6,27 @@ import '../engine/events.dart';
 import '../engine/hand_evaluator.dart';
 import '../engine/rules.dart';
 import '../gto/preflop/preflop_charts.dart';
+import '../gto/hand_read.dart';
 import '../gto/spot_strategy.dart';
-import '../ui/table_controller.dart' show PlaybackSpeed;
+import '../game/history.dart' show HandNote;
+import '../online/protocol.dart' show CloseReason, HelpLevel, JoinError;
+import '../online/room_host.dart' show InternetAccess;
+import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
 import 'strings_en.dart';
 import 'strings_es.dart';
 import 'strings_zh.dart';
 
 /// Glossary sections, in the order shown.
-enum GlossarySection { modes, positions, amounts, actions, hand, strategy, scoring, rules, styles }
+enum GlossarySection { modes, positions, amounts, actions, hand, strategy, scoring, rules, styles, online }
+
+/// The units of a wait, shortest first (see formatWait).
+enum WaitUnit { minutes, hours, days, weeks, months, years }
 
 /// Glossary entries, by section.
 enum GlossaryTerm {
   training(GlossarySection.modes),
   play(GlossarySection.modes),
+  drills(GlossarySection.modes),
   utg(GlossarySection.positions),
   utg1(GlossarySection.positions),
   lj(GlossarySection.positions),
@@ -43,6 +51,7 @@ enum GlossaryTerm {
   open(GlossarySection.actions),
   limp(GlossarySection.actions),
   threeBet(GlossarySection.actions),
+  preActions(GlossarySection.actions),
   holeCards(GlossarySection.hand),
   preflop(GlossarySection.hand),
   streets(GlossarySection.hand),
@@ -73,7 +82,18 @@ enum GlossaryTerm {
   tag(GlossarySection.styles),
   lag(GlossarySection.styles),
   station(GlossarySection.styles),
-  nit(GlossarySection.styles);
+  nit(GlossarySection.styles),
+  roomCode(GlossarySection.online),
+  host(GlossarySection.online),
+  hosting(GlossarySection.online),
+  onlineBots(GlossarySection.online),
+  timeLimit(GlossarySection.online),
+  helpLevel(GlossarySection.online),
+  seeCards(GlossarySection.online),
+  rebuys(GlossarySection.online),
+  sitOut(GlossarySection.online),
+  chat(GlossarySection.online),
+  away(GlossarySection.online);
 
   const GlossaryTerm(this.section);
   final GlossarySection section;
@@ -101,6 +121,34 @@ abstract class S {
   // Hand rankings.
   String get handRankings;
   String get royalFlush;
+
+  /// Online invites: the button, the message to send (with the link that
+  /// opens the app, and the code), copying and pasting it.
+  String get invite;
+  ///
+  /// [appLink] opens the app at the room; [wifiPage] and [internetPage] open
+  /// the web version at it (on the same Wi-Fi, from elsewhere), when the
+  /// host serves it.
+  String get copyInviteLink;
+  String get copyBrowserLink;
+  String get noInvite;
+  String get inviteThisComputer;
+
+  /// The page may not read the clipboard (a browser on a host's http page).
+  String get pasteBlocked;
+
+  /// Play Online: the code box (a code or an invite link; empty to create a
+  /// room), the join button, and a code that isn't one.
+  String get roomCodeOrLink;
+  String get emptyToCreate;
+  String get joinRoom;
+  String get notACode;
+
+  /// How often a hand comes: "1 in 38.5".
+  String oneIn(String x);
+
+  /// What the odds on the Hand Rankings screen count.
+  String get rankingOddsNote;
   String handCategory(HandCategory category);
 
   // Preflop Charts.
@@ -138,6 +186,14 @@ abstract class S {
   String get advanced;
   String get freePlay;
   String get players;
+
+  /// The ☰ item (and sheet) for changing the table: players, stacks, styles.
+  String get editTable;
+
+  /// Main menu: Play opens Solo and Multiplayer; Guides opens the guides.
+  String get solo;
+  String get multiplayer;
+  String get guides;
   String get stack;
   String get opponentStyles;
   String get random;
@@ -149,15 +205,9 @@ abstract class S {
   String get position;
   String get rotate;
   String get resetStacks;
-  String get betSizes;
   String get preflop;
   String get postflop;
-  String get add;
-  String get resetDefaults;
   String get cancel;
-  String get preflopSizePrompt;
-  String get postflopSizePrompt;
-  String between(String low, String high);
   String get rules;
   String get minRaise;
   String raiseRule(RaiseRule rule);
@@ -188,6 +238,12 @@ abstract class S {
   /// Under a player with no chips left.
   String get allInBadge;
   String get raiseAnySize;
+
+  /// The pre-actions, picked while another player acts (see
+  /// GlossaryTerm.preActions), and the line under them.
+  String get checkFold;
+  String get callAny;
+  String get playsAtYourTurn;
 
   /// The word for the pot in sizes ("0.5× pot").
   String get potWord;
@@ -226,6 +282,14 @@ abstract class S {
   String get evenHand;
   String noAnswer(NoAnswer? reason);
   String unavailable(Unavailable reason);
+
+  /// Why a play was a mistake, in a few words, with GTO's choice instead
+  /// ([amount] for a raise): "Too tight: GTO calls here."
+  String mistakeReason(MistakeKind kind, SpotActionKind gto, String amount);
+
+  /// The reason behind GTO's choice (see [reasonFor]) for the user's [hand]:
+  /// "62% of their hands beat yours, mostly flushes."
+  String mistakeWhy(Reason reason, String hand);
   String grade(DecisionGrade grade);
   String get columnYou;
   String get columnGto;
@@ -258,6 +322,197 @@ abstract class S {
   String sidePot(int number);
   String listNames(List<String> names);
   String hand(HandValue value);
+
+  // Online.
+  String get playOnline;
+  String get yourName;
+  String get enterName;
+  String get createRoom;
+  String get roomCode;
+  String get join;
+  String get server;
+
+  /// Under the server field: what an empty one means.
+  String get serverHint;
+
+  /// Hosting a room on this device: starting it, failing to, and why a
+  /// browser can't (Create Room greyed out).
+  String get startingRoom;
+  String get cantStartRoom;
+  String get cantHostInBrowser;
+
+  /// Joining from the website (https) failed: browsers block it from
+  /// reaching a room on someone's device.
+  String get websiteCantJoin;
+
+  /// Joining with just a code found no such room on this network.
+  String get roomNotNearby;
+
+  /// The ways into a room hosted here: the same network, and the internet
+  /// (through the router, or at the public address set by hand: [byHand],
+  /// "address:port"); and how to open the router by hand ([address] is
+  /// this device's on the local network).
+  String sameWifi(bool yes);
+  String internetStatus(InternetAccess access);
+  String get internetByHand;
+  String internetHelp({
+    required InternetAccess access,
+    required int port,
+    String? address,
+    String? byHand,
+    required bool windows,
+    required bool phone,
+  });
+
+  /// The host's public address, typed in the lobby when the router can't
+  /// be opened automatically: the box, what isn't one, and its "?" (forward
+  /// [port] to [address], this device's on the local network).
+  String get publicAddress;
+  String get notPublicAddress;
+  String publicAddressHelp({required int port, String? address, required bool windows});
+  String get connecting;
+
+  /// Why creating or joining failed (null: the server can't be reached).
+  String joinError(JoinError? error);
+
+  /// The room's name, from its code: "Room K7QXA".
+  String room(String code);
+  String get copied;
+  String get shareCode;
+  String get host;
+
+  /// Under a seat: a bot plays it, the player is away (their connection
+  /// dropped) or left, someone sits down next hand.
+  String get botBadge;
+  String get awayBadge;
+  String get leftBadge;
+  String get nextHandBadge;
+  String get help;
+  String get noHelp;
+  String helpLevel(HelpLevel level) => switch (level) {
+        HelpLevel.none => noHelp,
+        HelpLevel.simple => simple,
+        HelpLevel.advanced => advanced,
+      };
+  String get timeLimit;
+
+  /// A time limit choice: 0 is none.
+  String turnLimit(int seconds);
+  String secondsLeft(int seconds);
+  String get waitingForHost;
+  String get joinNextHand;
+  String nextHandIn(int seconds);
+  String onlineNotice(OnlineNotice notice);
+  String get hostAway;
+  String get connectionLost;
+
+  /// The connection dropped: getting it back.
+  String get reconnecting;
+
+  /// Play Online: back to the room the app was in when it closed.
+  String rejoinRoom(String code);
+
+  /// Why the room ended for this player.
+  String closed(CloseReason? reason);
+  String get closeRoom;
+
+  /// Online, from ☰: the help and time the host can change during the game.
+  String get tableSettings;
+  String get fromNextHand;
+  String get leave;
+  String get leaveTable;
+  String leaveWarning({required bool host});
+
+  /// Seats nobody has, and the host's bots: adding one (with its style),
+  /// taking it away, and the badge of one that leaves at the next hand.
+  String get seats;
+  String get emptySeat;
+  String get addBot;
+  String get removeBot;
+  String get leavingBadge;
+
+  /// A hand needs at least 2 players: in the lobby by Start, and at the
+  /// table while the game waits.
+  String get needPlayers;
+  String get waitingForPlayers;
+
+  /// Looking at another player's cards: the host's setting, the seat's
+  /// button, and the question first (everyone is told).
+  String get allowSeeCards;
+  String get seeCards;
+  String seeCardsQuestion(String name);
+
+  /// What everyone at the table is told: a player pressed Show GTO, or
+  /// looked at someone's cards (a null name is the user).
+  String helpNotice(String? name);
+  String peekNotice(String? name, String? target);
+  String note(HandNote note) => note.peek ? peekNotice(note.name, note.target) : helpNotice(note.name);
+  String get rulesChanged;
+
+  /// Out of chips: the room's rule, the seat's badge, and what the user
+  /// can do: Rebuy for [stack] (or Leave) with rebuys, else watch (the
+  /// room's Lobby, and back to Watch). Once one player has every chip,
+  /// the game is over: who won ([winner]; null when nobody is left).
+  String get rebuys;
+  String get outBadge;
+  String outOfChips({required bool rebuys});
+  String rebuy(String stack);
+  String get lobby;
+  String get watch;
+  String gameOver(String? winner, {bool you = false});
+
+  /// Sitting out (see GlossaryTerm.sitOut): ☰'s Sit Out and I'm Back, the
+  /// seat's badge, and what the user is told: they sit out from the next
+  /// hand (still in the one on screen), or they sit out now.
+  String get sitOut;
+  String get imBack;
+  String get sittingOutBadge;
+  String get sitOutNextHand;
+  String get youSitOut;
+
+  /// The host removes a player (their seat in the lobby or ☰ > Edit
+  /// Table): the choice, the question first, and what everyone else is
+  /// told ([name] was removed).
+  String get removePlayer;
+  String removePlayerQuestion(String name);
+  String get removePlayerWarning;
+  String removedNotice(String name);
+
+  /// The room's chat: its name, the box to type in, Send, an empty chat,
+  /// and why sending is greyed out for a moment (too many messages at once).
+  String get chat;
+  String get chatHint;
+  String get send;
+  String get noMessages;
+  String get chatTooFast;
+
+  /// Mistake drills (see GlossaryTerm.drills): the main menu's button with
+  /// how many spots are due; what the table says when a mistake is saved
+  /// ([again]: the same spot was saved before; [wait] like "10 min"); and
+  /// once a spot is played again, when it is back ([right]: played right,
+  /// or wrong; null: it couldn't be graded).
+  String get drills;
+  String drillsDue(int due);
+  String savedToDrills(String wait, {required bool again});
+  String drillQueued(String wait, {required bool? right});
+
+  /// Above the choices: a saved spot ([grade] as it was saved, [due] spots
+  /// due), or random hands, with when the next spot is due ([next]; null:
+  /// none is saved yet).
+  String drillSpot(String grade, int due);
+  String randomHands(String? next);
+
+  /// Drills with nothing saved yet, and the button that deals random hands.
+  String get noSavedMistakes;
+  String get playRandomHands;
+
+  /// Every saved spot (☰), and when each is due.
+  String get savedSpots;
+  String get dueNow;
+  String reviewIn(String wait);
+
+  /// A wait, short: "10 min", "1 h", "3 days".
+  String waitTime(int count, WaitUnit unit);
 
   // Glossary.
   String section(GlossarySection section);

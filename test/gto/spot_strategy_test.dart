@@ -11,6 +11,7 @@ import 'package:pokerfection/src/gto/preflop/preflop_equity.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_solver.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_tracker.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_tree.dart';
+import 'package:pokerfection/src/gto/raise_sizes.dart';
 import 'package:pokerfection/src/gto/spot_strategy.dart';
 
 SpotStrategy exampleSpot() => const SpotStrategy(
@@ -36,6 +37,35 @@ void main() {
     // The all-in's 0.209 BB lost to the better size counts a tenth.
     expect(score.scoredLoss, closeTo(0.378 + 0.0209 - 0.0105, 0.001));
     expect(score.grade, DecisionGrade.mistake);
+  });
+
+  test('a mistake says in a few words what was wrong, and what GTO does instead', () {
+    // GTO: call 35%, raise to 7.5 BB 65%.
+    expect(mistakeOf(exampleSpot(), [1, 0, 0, 0]), (MistakeKind.tooTight, 2));
+    expect(mistakeOf(exampleSpot(), [0, 1, 0, 0]), (MistakeKind.tooPassive, 2));
+    // All-in is the right move (a raise) at a much worse size.
+    expect(mistakeOf(exampleSpot(), [0, 0, 0, 1]), (MistakeKind.wrongSize, 2));
+    expect(mistakeOf(exampleSpot(), [0.3, 0.2, 0.4, 0.1]), (MistakeKind.tooTight, 2));
+  });
+
+  test("whole percents that match GTO's rounded mix are a perfect match", () {
+    const spot = SpotStrategy(
+      handName: 'KJs',
+      actions: [
+        SpotAction(kind: SpotActionKind.fold, amount: 0, action: PlayerAction.fold()),
+        SpotAction(kind: SpotActionKind.call, amount: 250, action: PlayerAction.call()),
+        SpotAction(kind: SpotActionKind.raise, amount: 500, action: PlayerAction.raiseTo(500)),
+        SpotAction(kind: SpotActionKind.raise, amount: 800, action: PlayerAction.raiseTo(800)),
+      ],
+      frequencies: [0.1327, 0.5241, 0.2287, 0.1145],
+      evs: [0, 0, 0, 0],
+    );
+    // GTO 13.27 / 52.41 / 34.32 in whole percents, as Show GTO fills them in:
+    // 13 / 53 / 34 (the spare point to the largest remainder), raises 67/33.
+    final mix = [0.13, 0.53, 0.34 * 0.67, 0.34 * 0.33];
+    final score = scoreDecision(spot, mix);
+    expect(score.mixMatch, closeTo(1, 1e-9));
+    expect(score.score, 100);
   });
 
   test('matching GTO exactly scores 100', () {
@@ -93,6 +123,31 @@ void main() {
     }
   });
 
+  test("every choice GTO really uses is equally good: the solver's small gaps between them are noise", () {
+    final spot = SpotStrategy.normalized(
+      handName: 'AQs',
+      actions: exampleSpot().actions,
+      frequencies: [0, 0.80, 0.17, 0.03],
+      evs: [0, 1.20, 1.23, 1.30],
+    );
+    final mix = (0.80 * 1.20 + 0.17 * 1.23) / 0.97;
+    expect(spot.evs[1], closeTo(mix, 1e-9));
+    expect(spot.evs[2], closeTo(mix, 1e-9));
+    // All-in at 3% isn't one of GTO's choices: never shown as better than them.
+    expect(spot.evs[3], closeTo(mix, 1e-9));
+    // Calling, GTO's main play, and raising, its rarer one, both score 100.
+    expect(scoreDecision(spot, [0, 1, 0, 0]).playScore, 100);
+    expect(scoreDecision(spot, [0, 0, 1, 0]).playScore, 100);
+    // With fold among GTO's choices, they are all worth exactly what folding is.
+    final close = SpotStrategy.normalized(
+      handName: 'T9o',
+      actions: exampleSpot().actions,
+      frequencies: [0.15, 0.71, 0.14, 0],
+      evs: [0, 0.03, -0.01, -2],
+    );
+    expect(close.evs, [0, 0, 0, -2]);
+  });
+
   test('a choice GTO never makes is never shown as better than what it does', () {
     final spot = SpotStrategy.normalized(
       handName: 'AA',
@@ -108,7 +163,6 @@ void main() {
     final equity =
         PreflopEquity.fromBytes(ByteData.sublistView(File('assets/preflop_equity.bin').readAsBytesSync()));
     final stacks = [2000, 3500, 1200, 5000];
-    const multiples = PreflopSettings.defaultRaiseMultiples;
     final rng = Random(7);
     Future<PreflopSolution> solveSubgame(PreflopSpec spec, Float64List? ranges) async =>
         PreflopSolver(PreflopTree(spec), equity, ranges: ranges).solve(iterations: 30);
@@ -139,14 +193,22 @@ void main() {
           final spot = tracker.spotFor(hand)!;
           answers++;
           final legal = hand.legalActions();
+          // 2, 3, 5, 8, ... BB from the min-raise up to all-in (what the others can call).
+          final sizes = raiseSizes(
+            minTo: legal.minRaiseTo,
+            allInTo: coveredAllIn(legal.maxRaiseTo, [
+              for (var s = 0; s < hand.playerCount; s++)
+                if (s != hero && !hand.isFolded(s)) hand.streetBetOf(s) + hand.stackOf(s),
+            ]),
+            bigBlind: 100,
+          );
           expect([for (final a in spot.actions) a.kind], [
             SpotActionKind.fold,
             legal.canCheck ? SpotActionKind.check : SpotActionKind.call,
-            // Sizes bigger than the stack are left out.
-            for (final m in multiples)
-              if (PreflopTree.raiseSize(legal.currentBet, m) < legal.maxRaiseTo) SpotActionKind.raise,
+            for (final _ in sizes) SpotActionKind.raise,
             SpotActionKind.allIn,
           ]);
+          expect([for (final a in spot.actions) if (a.kind == SpotActionKind.raise) a.amount], sizes);
           expect(spot.frequencies.reduce((a, b) => a + b), closeTo(1, 1e-9));
           expect(spot.actions[0].available, legal.canFold);
           expect(spot.actions[1].available, isTrue);

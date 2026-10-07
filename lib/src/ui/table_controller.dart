@@ -3,17 +3,29 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../app/drills.dart';
 import '../app/sounds.dart';
 import '../bots/bot.dart';
 import '../engine/actions.dart';
 import '../engine/cards.dart';
 import '../engine/events.dart';
 import '../engine/poker_hand.dart';
+import '../engine/rules.dart';
+import '../game/pre_action.dart';
 import '../game/table_session.dart';
 import '../gto/action_menu.dart';
 import '../gto/gto_solutions.dart';
+import '../gto/preflop/preflop_advisor.dart' show PreflopAdvisor;
 import '../gto/spot_strategy.dart';
+import '../online/mirror.dart';
+import '../online/online_client.dart';
+import '../online/protocol.dart';
+import '../online/seat_map.dart';
+import '../online/timing.dart';
 import 'table_view_state.dart';
+
+part 'drill_controller.dart';
+part 'online_table_controller.dart';
 
 enum PlaybackSpeed {
   normal('Normal', 1.0),
@@ -36,12 +48,14 @@ enum PlaybackSpeed {
 /// In Guess the GTO mode it also makes sure the preflop game is solved
 /// before each hand (solving the next one in the background while the
 /// current hand is played), and runs the "enter your mix, see the score" step.
+/// Each Mistake or Blunder is saved to the [drills], to play again later.
 class TableController extends ChangeNotifier {
   TableController(
     TableConfig config, {
     this._speed = PlaybackSpeed.normal,
     Random? random,
     GtoSolutions? solutions,
+    this.drills,
   })  : session = TableSession(
           config,
           random: random,
@@ -56,15 +70,15 @@ class TableController extends ChangeNotifier {
     ]);
   }
 
-  static const _chipMove = Duration(milliseconds: 380);
-  static const _cardMove = Duration(milliseconds: 260);
-  static const _dealGap = Duration(milliseconds: 70);
-  static const _botThink = Duration(milliseconds: 650);
-
   final TableSession session;
   final Random _random;
   final GtoSolutions _solutions;
-  late final TableViewState view;
+
+  /// Where the user's mistakes are saved (none: they aren't).
+  final Drills? drills;
+  /// What the table shows. Online, a new one when the players change
+  /// between hands.
+  late TableViewState view;
   final List<FlyingItem> flying = [];
 
   /// What the user may do, while waiting for their decision.
@@ -100,8 +114,17 @@ class TableController extends ChangeNotifier {
   }
 
   PokerHand? get hand => session.hand;
-  int get playerCount => session.config.playerCount;
-  bool get guessGto => session.config.guessGto;
+  /// The players on screen (online, the session may know the next hand's
+  /// line-up already).
+  int get playerCount => view.seats.length;
+  bool get guessGto => session.guessGto;
+
+  /// Advanced training (percentages) in the hand on screen.
+  bool get advanced => session.advanced;
+
+  /// Whether [seat] is the user's (online, nobody's in a hand the user
+  /// watches, out of chips).
+  bool isUserSeat(int seat) => seat == TableSession.heroSeat;
 
   Future<void> startNextHand() async {
     if (_busy) return;
@@ -125,6 +148,7 @@ class TableController extends ChangeNotifier {
     await _play(hand.drainEvents());
     await _runUntilHeroOrEnd();
     _busy = false;
+    await _playPreAction();
   }
 
   /// Waits until the next hand's whole preflop game is solved, showing
@@ -186,12 +210,17 @@ class TableController extends ChangeNotifier {
     await tracking;
     await _runUntilHeroOrEnd();
     _busy = false;
+    await _playPreAction();
   }
 
   /// The action the user will play once they continue, and whether it was
   /// drawn from their mix (rather than ticked).
   int? heroPlay;
   bool heroDrew = false;
+
+  /// What the user actually plays when it isn't [heroPlay]'s action: a raise
+  /// of any amount (from the slider), graded as the nearest solved size.
+  PlayerAction? heroAction;
 
   /// Scores the user's mix (how often to take each action, adding up to 1)
   /// and fixes the action to play: [choice], or one drawn from the mix.
@@ -210,15 +239,47 @@ class TableController extends ChangeNotifier {
       mix: heroMix!,
       score: heroScore!,
       oneAction: oneAction,
+      turnId: _recordTurnId,
     )..played = heroPlay);
+    _scored(heroScore!);
     _notify();
   }
 
-  int _draw(SpotStrategy spot, List<double> mix) {
+  /// Online: the server's turn a decision is recorded at.
+  int? get _recordTurnId => null;
+
+  /// The user's decision was just scored: a Mistake or a Blunder is saved
+  /// to the drills (the same spot saved before starts over), and the table
+  /// says so ([savedToDrills]).
+  void _scored(DecisionScore score) {
+    final drills = this.drills, hand = session.hand;
+    if (drills == null || hand == null || score.grade.index < DecisionGrade.mistake.index) return;
+    final spot = DrillSpot.at(
+      hand,
+      players: session.players,
+      styles: session.styles,
+      grade: score.grade,
+      evLoss: score.evLoss,
+      now: drills.now(),
+    );
+    if (spot == null) return;
+    final added = drills.save(spot);
+    if (!_saved.isClosed) _saved.add((again: !added, wait: spot.cooldown));
+  }
+
+  /// Tells the table each mistake saved to the drills ([again]: the same
+  /// spot was saved before), and when it is first due ([wait] from now).
+  Stream<({bool again, Duration wait})> get savedToDrills => _saved.stream;
+  final _saved = StreamController<({bool again, Duration wait})>.broadcast();
+
+  int _draw(SpotStrategy spot, List<double> mix) => _drawFrom(spot.actions, mix);
+
+  /// One of [actions] (those allowed), drawn at random from [mix].
+  int _drawFrom(List<SpotAction> actions, List<double> mix) {
     var roll = _random.nextDouble();
-    var last = spot.actions.indexWhere((a) => a.available);
+    var last = actions.indexWhere((a) => a.available);
     for (var i = 0; i < mix.length; i++) {
-      if (mix[i] <= 0 || !spot.actions[i].available) continue;
+      if (mix[i] <= 0 || !actions[i].available) continue;
       last = i;
       roll -= mix[i];
       if (roll < 0) return i;
@@ -228,12 +289,14 @@ class TableController extends ChangeNotifier {
 
   /// Simple training: plays [choice] and grades it against GTO. Better plays
   /// go ahead at once; after a mistake or a blunder, GTO's answer shows first
-  /// (then [continueHand]).
-  Future<void> playGraded(int choice) async {
+  /// (then [continueHand]). A raise of another amount is played as [action]
+  /// and graded as [choice], the nearest size GTO has.
+  Future<void> playGraded(int choice, {PlayerAction? action}) async {
     final spot = heroSpot;
     if (spot == null) return;
     submitMix([for (var i = 0; i < spot.actions.length; i++) i == choice ? 1.0 : 0.0],
         choice: choice, oneAction: true);
+    heroAction = action;
     final grade = heroScore?.grade;
     if (grade != null && grade.index < DecisionGrade.mistake.index) await continueHand();
   }
@@ -249,7 +312,7 @@ class TableController extends ChangeNotifier {
   Future<void> continueHand() async {
     final spot = heroSpot, play = heroPlay;
     if (spot == null || play == null || heroScore == null) return;
-    await heroAct(spot.actions[play].action);
+    await heroAct(heroAction ?? spot.actions[play].action);
   }
 
   /// Shows or hides one bot's cards, right away and in later hands.
@@ -297,6 +360,11 @@ class TableController extends ChangeNotifier {
       ..faceUp = show;
   }
 
+  /// Whether [seat]'s cards are shown on the table (a player who folds
+  /// keeps them, dimmed): bots the user chose to see; online, a player whose
+  /// cards the user looked at.
+  bool _cardsShown(int seat) => session.revealedSeats.contains(seat);
+
   /// Changes one bot's style; null makes it random and secret.
   void setStyle(int seat, BotStyle? style) {
     session.setStyle(seat, style);
@@ -337,11 +405,13 @@ class TableController extends ChangeNotifier {
     heroScore = null;
     heroPlay = null;
     heroDrew = false;
+    heroAction = null;
   }
 
   @override
   void dispose() {
     _disposed = true;
+    unawaited(_saved.close());
     super.dispose();
   }
 
@@ -354,22 +424,20 @@ class TableController extends ChangeNotifier {
       _notify();
       await _waitForAnswers();
       if (_disposed) return;
-      if (seat == TableSession.heroSeat) {
+      final recorded = _recordedMove(seat);
+      if (seat == TableSession.heroSeat && recorded == null) {
         heroOptions = hand.legalActions();
         heroSpot = session.heroSpot();
-        _sound(SoundEffect.yourTurn);
-        heroMenu = heroSpot?.actions ??
-            actionMenu(
-              hand,
-              preflopSizes: session.config.preflopSizes,
-              postflopSizes: session.config.postflopSizes,
-            );
+        heroMenu = heroSpot?.actions ?? actionMenu(hand);
+        // A pre-action is played once the table is free (see _playPreAction).
+        _due = _preActionChoice();
+        if (_due == null) _sound(SoundEffect.yourTurn);
         _notify();
         return;
       }
-      await _pause(_botThink);
+      await _pause(Playback.botThink);
       if (_disposed) return;
-      hand.act(session.botDecision());
+      hand.act(recorded ?? session.botDecision());
       if (hand.isOver) _precomputeNext();
       final tracking = session.afterAction();
       await _play(hand.drainEvents());
@@ -380,6 +448,87 @@ class TableController extends ChangeNotifier {
     handOver = true;
     _notify();
   }
+
+  /// A drill replays a saved hand: the move it recorded for [seat] (the
+  /// user's own earlier moves too), while there are any. Null: the bot
+  /// decides, or the user does.
+  PlayerAction? _recordedMove(int seat) => null;
+
+  // ---------------------------------------------------------------------------
+  // Pre-actions
+  // ---------------------------------------------------------------------------
+
+  /// The user's pick for their next turn, made while someone else acts (see
+  /// [PreAction]), with what they had to call then; null if none.
+  ({PreAction kind, int toCall})? preAction;
+
+  /// The choice a pre-action plays at the user's turn, until the table is
+  /// free to play it.
+  int? _due;
+
+  /// While someone else acts in a hand the user is still in (not folded or
+  /// all-in): what the user has to call right now, as the table shows it,
+  /// so they can pick a pre-action. Null otherwise, and in advanced training
+  /// (its decisions need percentages).
+  int? get preActionCall {
+    final acting = view.actingSeat;
+    if (handOver || heroOptions != null || acting == null || isUserSeat(acting) || !_preActionsOn) return null;
+    if (view.seats.isEmpty || !isUserSeat(TableSession.heroSeat)) return null;
+    final me = view.seats[TableSession.heroSeat];
+    if (me.cardsHeld == 0 || me.folded || me.allIn || me.stack == 0) return null;
+    return _shownToCall();
+  }
+
+  bool get _preActionsOn => !(guessGto && advanced);
+
+  /// Picks [kind] for the user's next turn, or drops it if it is the one
+  /// picked already.
+  void togglePreAction(PreAction kind) {
+    final toCall = preActionCall;
+    if (toCall == null) return;
+    preAction = preAction?.kind == kind ? null : (kind: kind, toCall: toCall);
+    _notify();
+  }
+
+  /// What the user has to call as the table shows it (a bet counts once its
+  /// chips are in front of the player). Before the flop the big blind sets
+  /// the price, even when it was posted short (as in PokerHand).
+  int _shownToCall() {
+    final me = view.seats[TableSession.heroSeat];
+    final price = view.seats.fold(view.board.isEmpty ? TableConfig.bigBlind : 0, (most, seat) => max(most, seat.bet));
+    return max(0, min(price - me.bet, me.stack));
+  }
+
+  /// A pre-action that no longer fits what the table shows goes: Check once
+  /// someone bets, Call once the amount changes.
+  void _reviewPreAction() {
+    final pre = preAction;
+    if (pre == null || view.seats.isEmpty) return;
+    if (!pre.kind.fits(picked: pre.toCall, toCall: _shownToCall())) preAction = null;
+  }
+
+  /// At the user's turn: the choice their pre-action plays, if it still
+  /// fits (played or not, it goes).
+  int? _preActionChoice() {
+    final pre = preAction, options = heroOptions, menu = heroMenu;
+    preAction = null;
+    if (pre == null || options == null || menu == null || !_preActionsOn) return null;
+    return pre.kind.choiceIn(menu, options, picked: pre.toCall);
+  }
+
+  /// Plays the pre-action due at the user's turn, if any.
+  Future<void> _playPreAction() async {
+    final choice = _due;
+    _due = null;
+    if (choice != null && !_disposed) await _playChoice(choice);
+  }
+
+  /// Plays [choice] of the user's menu as the buttons do: graded against
+  /// GTO when there is an answer (simple training), else at once.
+  Future<void> _playChoice(int choice) => _gradesPlay ? playGraded(choice) : heroAct(heroMenu![choice].action);
+
+  /// Whether the user's play at this decision is graded.
+  bool get _gradesPlay => heroSpot != null;
 
   // ---------------------------------------------------------------------------
   // Event playback
@@ -395,6 +544,7 @@ class TableController extends ChangeNotifier {
   Future<void> _playEvent(GameEvent event) async {
     switch (event) {
       case HandStarted():
+        preAction = null;
         for (final (i, seat) in view.seats.indexed) {
           seat.resetForHand(event.stacks[i], event.positions[i]);
         }
@@ -406,43 +556,44 @@ class TableController extends ChangeNotifier {
           ..results.clear()
           ..heroResult = null;
         _notify();
-        await _pause(const Duration(milliseconds: 250));
+        await _pause(Playback.handStart);
 
       case AntesPosted():
         var total = 0;
         event.amounts.forEach((seat, amount) {
           view.seats[seat].stack -= amount;
           total += amount;
-          _fly(Anchor.seat(seat), const Anchor.pot(), _chipMove, chips: amount);
+          _fly(Anchor.seat(seat), const Anchor.pot(), Playback.chipMove, chips: amount);
         });
-        await _pause(_chipMove);
+        await _pause(Playback.chipMove);
         view.pots = [total];
         _notify();
 
       case BlindPosted():
         final seat = view.seats[event.seat];
         seat.stack -= event.amount;
-        _fly(Anchor.seat(event.seat), Anchor.bet(event.seat), _chipMove, chips: event.amount,
+        _fly(Anchor.seat(event.seat), Anchor.bet(event.seat), Playback.chipMove, chips: event.amount,
             onArrive: () => seat.bet += event.amount);
-        await _pause(_chipMove * 0.7);
+        await _pause(Playback.blindPause);
 
       case HoleCardsDealt():
         for (var round = 0; round < 2; round++) {
           for (final seatIndex in event.dealOrder) {
             final seat = view.seats[seatIndex];
-            final visible =
-                seatIndex == TableSession.heroSeat || session.revealedSeats.contains(seatIndex);
+            // Online, only the user's own cards are in the event.
+            final visible = (isUserSeat(seatIndex) || _cardsShown(seatIndex)) &&
+                event.cards.containsKey(seatIndex);
             if (visible) seat.cards = event.cards[seatIndex]!;
             _sound(SoundEffect.deal);
-            _fly(const Anchor.deck(), Anchor.seatCards(seatIndex), _cardMove,
+            _fly(const Anchor.deck(), Anchor.seatCards(seatIndex), Playback.cardMove,
                 card: visible ? seat.cards[round] : null, faceUp: visible, onArrive: () {
               seat.cardsHeld++;
               if (visible) seat.faceUp = true;
             });
-            await _pause(_dealGap);
+            await _pause(Playback.dealGap);
           }
         }
-        await _pause(_cardMove);
+        await _pause(Playback.cardMove);
 
       case ActionTaken():
         final seat = view.seats[event.seat];
@@ -458,54 +609,57 @@ class TableController extends ChangeNotifier {
         if (event.kind == ActionKind.fold) {
           seat.folded = true;
           // The user's cards and shown cards stay up (greyed); the others go to the muck.
-          if (event.seat != TableSession.heroSeat && !session.revealedSeats.contains(event.seat)) {
+          if (!isUserSeat(event.seat) && !_cardsShown(event.seat)) {
             final count = seat.cardsHeld;
             seat.cardsHeld = 0;
             for (var i = 0; i < count; i++) {
-              _fly(Anchor.seatCards(event.seat), const Anchor.deck(), _cardMove, fadeOut: true);
+              _fly(Anchor.seatCards(event.seat), const Anchor.deck(), Playback.cardMove, fadeOut: true);
             }
           }
         }
         if (event.chipsAdded > 0) {
           seat.stack -= event.chipsAdded;
-          _fly(Anchor.seat(event.seat), Anchor.bet(event.seat), _chipMove,
+          _fly(Anchor.seat(event.seat), Anchor.bet(event.seat), Playback.chipMove,
               chips: event.chipsAdded, onArrive: () => seat.bet += event.chipsAdded);
         }
         _notify();
-        await _pause(_chipMove);
+        await _pause(Playback.chipMove);
 
       case UncalledBetReturned():
         final seat = view.seats[event.seat];
         seat.bet -= event.amount;
-        _fly(Anchor.bet(event.seat), Anchor.seat(event.seat), _chipMove,
+        _fly(Anchor.bet(event.seat), Anchor.seat(event.seat), Playback.chipMove,
             chips: event.amount, onArrive: () => seat.stack += event.amount);
-        await _pause(_chipMove);
+        await _pause(Playback.chipMove);
 
       case BetsCollected():
+        // A pre-action is for the street it was picked on.
+        preAction = null;
         view.actingSeat = null;
         if (view.seats.any((s) => s.bet > 0)) _sound(SoundEffect.chips);
         for (final (index, seat) in view.seats.indexed) {
           if (seat.bet > 0) {
-            _fly(Anchor.bet(index), const Anchor.pot(), _chipMove, chips: seat.bet);
+            _fly(Anchor.bet(index), const Anchor.pot(), Playback.chipMove, chips: seat.bet);
             seat.bet = 0;
           }
           if (!seat.folded) seat.action = null;
         }
         _notify();
-        await _pause(_chipMove);
+        await _pause(Playback.chipMove);
         view.pots = [for (final pot in event.pots) pot.amount];
         _notify();
-        await _pause(const Duration(milliseconds: 150));
+        await _pause(Playback.potSettle);
 
       case BoardDealt():
+        preAction = null;
         final firstSlot = view.board.length;
         for (final (i, card) in event.cards.indexed) {
           _sound(SoundEffect.deal);
-          _fly(const Anchor.deck(), Anchor.board(firstSlot + i), _cardMove, card: card, faceUp: true,
+          _fly(const Anchor.deck(), Anchor.board(firstSlot + i), Playback.cardMove, card: card, faceUp: true,
               onArrive: () => view.board.add(card));
-          await _pause(const Duration(milliseconds: 120));
+          await _pause(Playback.boardGap);
         }
-        await _pause(_cardMove + const Duration(milliseconds: 250));
+        await _pause(Playback.cardMove + Playback.boardSettle);
 
       case HandsRevealed():
         event.cards.forEach((seat, cards) {
@@ -514,7 +668,7 @@ class TableController extends ChangeNotifier {
             ..faceUp = true;
         });
         _notify();
-        await _pause(const Duration(milliseconds: 800));
+        await _pause(Playback.reveal);
 
       case PotAwarded():
         if (event.winningHand == null) {
@@ -526,19 +680,20 @@ class TableController extends ChangeNotifier {
         }
         event.shares.forEach((seatIndex, amount) {
           final seat = view.seats[seatIndex];
-          _fly(const Anchor.pot(), Anchor.seat(seatIndex), _chipMove * 1.4, chips: amount,
+          _fly(const Anchor.pot(), Anchor.seat(seatIndex), Playback.awardMove, chips: amount,
               onArrive: () {
             seat.stack += amount;
             seat.won += amount;
           });
         });
         view.results.add(PotResult(event, sidePots: view.pots.length > 1));
-        _sound(event.shares.containsKey(TableSession.heroSeat) ? SoundEffect.win : SoundEffect.chips);
+        _sound(event.shares.keys.any(isUserSeat) ? SoundEffect.win : SoundEffect.chips);
         _notify();
-        await _pause(_chipMove * 1.4 + const Duration(milliseconds: 400));
+        await _pause(Playback.awardMove + Playback.awardSettle);
 
       case HandEnded():
-        view.heroResult = event.netChange[TableSession.heroSeat];
+        preAction = null;
+        view.heroResult = isUserSeat(TableSession.heroSeat) ? event.netChange[TableSession.heroSeat] : null;
         _notify();
     }
   }
@@ -591,14 +746,16 @@ class TableController extends ChangeNotifier {
     flying.add(item);
     _notify();
     Timer(item.duration, () {
-      if (_disposed) return;
-      flying.remove(item);
+      // Online, a table that starts over takes what still flies off it: that doesn't land.
+      if (_disposed || !flying.remove(item)) return;
       onArrive?.call();
       _notify();
     });
   }
 
   void _notify() {
-    if (!_disposed) notifyListeners();
+    if (_disposed) return;
+    _reviewPreAction();
+    notifyListeners();
   }
 }

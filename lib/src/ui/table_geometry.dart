@@ -10,8 +10,12 @@ import 'widgets/card_view.dart' show cardAspectRatio;
 /// Seats sit on an oval that stretches to fill the space, so the same code
 /// works on a tall phone screen and a wide desktop window. The user's seat
 /// (seat 0) is at the bottom; the other seats follow clockwise.
+///
+/// Online, players out of chips keep a place at the table without playing:
+/// then [seatCount] counts the places, and [places] says where each seat of
+/// the hand sits (see TableViewState).
 class TableGeometry {
-  TableGeometry(this.size, this.seatCount) {
+  TableGeometry(this.size, this.seatCount, {this.places}) {
     scale = min(size.width / 520, size.height / 470).clamp(0.62, 1.5);
     final yTop = 6 + seatCardsAbove + seatBoxSize.height / 2;
     final yBottom = size.height - 6 - seatBoxSize.height / 2 - pillHeight / 2;
@@ -22,6 +26,9 @@ class TableGeometry {
 
   final Size size;
   final int seatCount;
+
+  /// The place of each seat (none: seat i in place i).
+  final List<int>? places;
   late final double scale;
   late final Offset center;
   late final double radiusX;
@@ -40,8 +47,11 @@ class TableGeometry {
   double get _boardGap => 5 * scale;
 
   /// Center of a seat's info box.
-  Offset seat(int i) {
-    final angle = pi / 2 + i * 2 * pi / seatCount;
+  Offset seat(int i) => place(places?[i] ?? i);
+
+  /// Center of the info box at [place] around the table.
+  Offset place(int place) {
+    final angle = pi / 2 + place * 2 * pi / seatCount;
     return center + Offset(radiusX * cos(angle), radiusY * sin(angle));
   }
 

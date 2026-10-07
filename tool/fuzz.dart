@@ -17,6 +17,7 @@ import 'package:pokerfection/src/engine/hand_evaluator.dart';
 import 'package:pokerfection/src/engine/poker_hand.dart';
 import 'package:pokerfection/src/engine/positions.dart';
 import 'package:pokerfection/src/engine/rules.dart';
+import 'package:pokerfection/src/gto/action_menu.dart';
 import 'package:pokerfection/src/gto/combos.dart';
 import 'package:pokerfection/src/gto/hand_classes.dart';
 import 'package:pokerfection/src/gto/postflop/parallel_postflop_solver.dart';
@@ -27,6 +28,7 @@ import 'package:pokerfection/src/gto/preflop/parallel_preflop_solver.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_equity.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_solver.dart';
 import 'package:pokerfection/src/gto/preflop/preflop_tree.dart';
+import 'package:pokerfection/src/gto/spot_strategy.dart';
 
 final equity =
     PreflopEquity.fromBytes(ByteData.sublistView(File('assets/preflop_equity.bin').readAsBytesSync()));
@@ -123,12 +125,6 @@ PlayerAction randomAction(LegalActions legal, Random rng) {
   return roll < 0.75 ? const PlayerAction.call() : const PlayerAction.fold();
 }
 
-/// 1 to 5 raise sizes (multiples of the bet faced, or shares of the pot).
-List<double> randomSizes(Random rng, List<double> choices) {
-  final sizes = {for (var k = 1 + rng.nextInt(5); k > 0; k--) choices[rng.nextInt(choices.length)]};
-  return sizes.toList()..sort();
-}
-
 // -----------------------------------------------------------------------------
 // Engine
 // -----------------------------------------------------------------------------
@@ -202,7 +198,6 @@ class _PreflopCase {
     ante = randomAnte(rng);
     rule = randomRule(rng);
     seed = rng.nextInt(1 << 30);
-    multiples = randomSizes(rng, const [1.5, 2, 2.2, 2.5, 3, 3.5, 4, 5, 6]);
     // Walk into the hand with random actions; stop at a random point.
     final hand = start();
     final stop = rng.nextInt(2 * n);
@@ -222,7 +217,6 @@ class _PreflopCase {
   late final int ante;
   late final RaiseRule rule;
   late final int seed;
-  late final List<double> multiples;
   final history = <PreflopAction>[];
 
   /// Preflop order of the player to act after [history], or -1 if the
@@ -253,7 +247,6 @@ class _PreflopCase {
         stacks: stacks,
         ante: ante,
         raiseRule: rule,
-        raiseMultiples: multiples,
         history: subgame ? history : const [],
         hero: subgame ? hero : -1,
       );
@@ -282,6 +275,8 @@ void preflopTree(Random rng) {
     PreflopNode node = tree.root;
     while (node is PreflopDecision) {
       final i = rng.nextInt(node.actions.length);
+      final a = node.actions[i];
+      check(a.move != PreflopMove.raise || a.raiseTo % 50 == 0, () => 'raise to ${a.raiseTo}: not a multiple of 0.5 BB');
       path.add((node, i));
       node = node.children[i];
     }
@@ -290,8 +285,8 @@ void preflopTree(Random rng) {
 }
 
 /// At the root of the user's subgame: fold only when facing a bet, check or
-/// call, raise sizes within the legal range (and short of all-in), all-in
-/// whenever raising is possible.
+/// call, exactly the sizes of the user's menu, all-in whenever raising is
+/// possible.
 void _checkFullMenu(_PreflopCase c, PreflopTree tree) {
   final hand = c.start();
   for (final a in c.history) {
@@ -305,19 +300,10 @@ void _checkFullMenu(_PreflopCase c, PreflopTree tree) {
   check(moves.contains(legal.canCheck ? PreflopMove.check : PreflopMove.call), () => 'no check/call: $moves');
   check(moves.contains(PreflopMove.allIn) == legal.canRaise, () => 'all-in offered wrongly: $moves');
   for (final a in root.actions.where((a) => a.move == PreflopMove.raise)) {
-    check(a.raiseTo >= legal.minRaiseTo && a.raiseTo < legal.maxRaiseTo * 0.9,
+    check(a.raiseTo >= legal.minRaiseTo && a.raiseTo < legal.maxRaiseTo,
         () => 'raise to ${a.raiseTo} outside ${legal.minRaiseTo}-${legal.maxRaiseTo}');
   }
-  if (legal.canRaise) {
-    // Every size of the menu that is allowed must be there.
-    for (final m in c.multiples) {
-      final to = PreflopTree.raiseSize(legal.currentBet, m);
-      if (to >= legal.minRaiseTo && to < legal.maxRaiseTo * 0.9) {
-        check(root.actions.any((a) => a.move == PreflopMove.raise && a.raiseTo == to),
-            () => 'size ${m}x (to $to) is allowed but missing');
-      }
-    }
-  }
+  if (legal.canRaise) _checkSameSizes(hand, [for (final a in root.actions) if (a.move == PreflopMove.raise) a.raiseTo]);
 }
 
 PlayerAction _engineAction(PreflopAction a) => switch (a.move) {
@@ -376,7 +362,6 @@ class _PostflopCase {
     preflopTo = rng.nextBool() ? 100 : 200 + rng.nextInt(400);
     street = [Street.flop, Street.turn, Street.river][rng.nextInt(3)];
     hero = rng.nextInt(3) - 1;
-    sizes = randomSizes(rng, const [0.2, 0.25, 0.33, 0.5, 0.66, 0.75, 1, 1.25, 1.5, 2, 3]);
   }
 
   late final int seed;
@@ -385,7 +370,6 @@ class _PostflopCase {
   late final int preflopTo;
   late final Street street;
   late final int hero;
-  late final List<double> sizes;
 
   /// The hand at the start of [street], or null if someone is all-in by then.
   PokerHand? start() {
@@ -422,7 +406,6 @@ class _PostflopCase {
       bigBlind: 100,
       raiseRule: rule,
       hero: hero,
-      heroSizes: sizes,
     );
   }
 }
@@ -442,7 +425,7 @@ void postflopTree(Random rng) {
       final d = node;
       check(hand.toAct == (d.player == 0 ? first : 1 - first), () => 'wrong player to act');
       final legal = hand.legalActions();
-      if (d.player == spec.hero) _checkPostflopMenu(spec, d, legal);
+      if (d.player == spec.hero) _checkPostflopMenu(d, hand);
       final a = d.actions[rng.nextInt(d.actions.length)];
       switch (a.move) {
         case PostflopMove.fold:
@@ -457,6 +440,7 @@ void postflopTree(Random rng) {
         case PostflopMove.bet || PostflopMove.raise:
           check(legal.canRaise && a.to >= legal.minRaiseTo && a.to < legal.maxRaiseTo,
               () => '${a.move.name} to ${a.to} is not legal (${legal.minRaiseTo}-${legal.maxRaiseTo})');
+          check(a.to % 50 == 0, () => '${a.move.name} to ${a.to}: not a multiple of 0.5 BB');
           hand.act(PlayerAction.raiseTo(a.to));
         case PostflopMove.allIn:
           check(legal.canRaise && a.to == legal.maxRaiseTo, () => 'all-in to ${a.to} is off');
@@ -471,21 +455,24 @@ void postflopTree(Random rng) {
   }
 }
 
-void _checkPostflopMenu(PostflopSpec spec, PostflopDecision d, LegalActions legal) {
+void _checkPostflopMenu(PostflopDecision d, PokerHand hand) {
+  final legal = hand.legalActions();
   final moves = [for (final a in d.actions) a.move];
   check(moves.contains(PostflopMove.fold) == legal.canFold, () => 'fold offered wrongly: $moves');
   check(moves.contains(PostflopMove.allIn) == legal.canRaise, () => 'all-in offered wrongly: $moves');
   if (!legal.canRaise) return;
-  final pot = spec.pot + d.bets[0] + d.bets[1];
-  for (final share in spec.heroSizes) {
-    final to = PostflopTree.sizeTo(legal.currentBet, legal.streetBet, pot, share, spec.bigBlind);
-    final allowed = to >= legal.minRaiseTo && to < legal.maxRaiseTo * PostflopSpec.nearlyAllIn;
-    final present = d.actions.any((a) => a.to == to && a.move != PostflopMove.allIn);
-    // A size can be missing when a smaller share gives the same amount.
-    final duplicate = spec.heroSizes.any((s) =>
-        s < share && PostflopTree.sizeTo(legal.currentBet, legal.streetBet, pot, s, spec.bigBlind) == to);
-    check(present || !allowed || duplicate, () => 'size $share (to $to) is allowed but missing');
-  }
+  _checkSameSizes(hand, [
+    for (final a in d.actions)
+      if (a.move == PostflopMove.bet || a.move == PostflopMove.raise) a.to,
+  ]);
+}
+
+/// The solved game offers the user exactly the raise sizes of their menu.
+void _checkSameSizes(PokerHand hand, List<int> solved) {
+  final menu = [for (final a in actionMenu(hand)) if (a.kind == SpotActionKind.raise) a.amount];
+  check(menu.length == solved.length && [for (var i = 0; i < menu.length; i++) menu[i] == solved[i]].every((x) => x),
+      () => 'solved sizes $solved, the menu has $menu');
+  check(menu.every((to) => to % 50 == 0), () => 'sizes $menu: not multiples of 0.5 BB');
 }
 
 // -----------------------------------------------------------------------------

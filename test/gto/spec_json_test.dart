@@ -12,7 +12,6 @@ void main() {
       stacks: [4000, 10000, 1500, 8000],
       ante: 10,
       raiseRule: RaiseRule.values.last,
-      raiseMultiples: const [2.2, 3.0],
       history: const [PreflopAction(PreflopMove.fold), PreflopAction(PreflopMove.raise, 250)],
       hero: 2,
     );
@@ -29,7 +28,6 @@ void main() {
       bigBlind: 100,
       raiseRule: RaiseRule.values.last,
       hero: 1,
-      heroSizes: const [0.5, 1.2],
       botBetSizes: const [0.4],
       botRaiseSizes: const [0.9],
     );

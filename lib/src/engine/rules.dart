@@ -1,3 +1,9 @@
+/// The version of the betting rules: the engine's (this folder), the raise
+/// sizes (lib/src/gto/raise_sizes.dart) and the bots' sizes, rounded to
+/// 0.5 BB. Every device at an online table must play the same rules, so a
+/// device with other ones can't join. Bump it whenever any of them changes.
+const rulesVersion = 1;
+
 /// The min-raise rule: how small a raise may be.
 enum RaiseRule {
   /// Standard No-Limit: a raise must be at least the size of the last bet or

@@ -1,0 +1,3 @@
+# The run scripts: bash needs LF, cmd is happiest with CRLF.
+/run text eol=lf
+*.cmd text eol=crlf

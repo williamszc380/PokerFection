@@ -6,12 +6,13 @@ export '../l10n/strings.dart' show GlossarySection, GlossaryTerm;
 
 /// A small "?" next to a setting or heading: shows the glossary entries of
 /// [section], or just [terms] (from any section), with a link to the whole
-/// glossary.
+/// glossary. An [intro] (what applies right now, say) goes first.
 class HelpButton extends StatefulWidget {
-  const HelpButton({super.key, required this.section, this.terms});
+  const HelpButton({super.key, required this.section, this.terms, this.intro});
 
   final GlossarySection section;
   final List<GlossaryTerm>? terms;
+  final String? intro;
 
   @override
   State<HelpButton> createState() => _HelpButtonState();
@@ -54,7 +55,11 @@ class _HelpButtonState extends State<HelpButton> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [for (final term in entries) GlossaryEntry(term: term)],
+              children: [
+                if (widget.intro case final intro?)
+                  Padding(padding: const EdgeInsets.only(bottom: 12), child: SelectableText(intro)),
+                for (final term in entries) GlossaryEntry(term: term),
+              ],
             ),
           ),
         ),

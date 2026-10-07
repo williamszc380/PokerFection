@@ -1,5 +1,10 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
+import '../online/online_client.dart' show RejoinRecord;
 import '../ui/table_controller.dart' show PlaybackSpeed;
 import 'settings_store.dart';
 import 'sounds.dart';
@@ -87,6 +92,36 @@ class AppSettings extends ChangeNotifier {
   CardFaceStyle cardFaces = CardFaceStyle.twoColors;
   FeltStyle felt = FeltStyle.green;
 
+  /// The name shown to the other players online.
+  String nickname = '';
+
+  /// The game server to play online on; empty for the app's own.
+  String serverUrl = '';
+
+  /// Hosting a room here: the router's public address, typed by hand (its
+  /// port forwarded by hand) when it can't be opened automatically; empty
+  /// if none. "203.0.113.7", or with the port outside: "203.0.113.7:47500".
+  String publicAddress = '';
+
+  /// The online room this player is in, to come back to it if the app
+  /// closes (or the page reloads) during the game. Changing it (see
+  /// [remember]) only tells those who listen to it.
+  final ValueNotifier<RejoinRecord?> rejoin = ValueNotifier(null);
+
+  /// A random key this app sends when it joins an online room (it says
+  /// nothing else about the device), made and saved the first time: a room
+  /// the host removed this player from won't let them in again.
+  String get device {
+    if (_device.isEmpty) {
+      final random = Random.secure();
+      _device = base64Url.encode([for (var i = 0; i < 16; i++) random.nextInt(256)]).replaceAll('=', '');
+      _save();
+    }
+    return _device;
+  }
+
+  String _device = '';
+
   static AppSettings of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<AppSettingsScope>()?.notifier ?? _fallback;
 
@@ -105,6 +140,11 @@ class AppSettings extends ChangeNotifier {
     final savedVolume = saved['volume'];
     if (savedVolume is num) volume = savedVolume.toDouble().clamp(0, 1);
     cardFaces = pick(CardFaceStyle.values, saved['cardFaces'], cardFaces);
+    if (saved['nickname'] case final String name) nickname = name;
+    if (saved['serverUrl'] case final String url) serverUrl = url;
+    if (saved['publicAddress'] case final String address) publicAddress = address;
+    if (saved['device'] case final String key) _device = key;
+    rejoin.value = RejoinRecord.fromJson(saved['rejoin']);
     // Settings saved before there were three styles.
     if (saved['fourColorDeck'] == true && saved['cardFaces'] == null) cardFaces = CardFaceStyle.fourColors;
     Sounds.instance.volume = volume;
@@ -116,6 +156,21 @@ class AppSettings extends ChangeNotifier {
     change(this);
     Sounds.instance.volume = volume;
     notifyListeners();
+    _save();
+  }
+
+  /// Keeps [record] (null: forgets it) to come back to an online room,
+  /// and saves it.
+  void remember(RejoinRecord? record) {
+    // Not while screens are built or taken down (a table that closes forgets its room).
+    scheduleMicrotask(() {
+      if (record == null && rejoin.value == null) return;
+      rejoin.value = record;
+      _save();
+    });
+  }
+
+  void _save() {
     _store?.write({
       'language': language.name,
       'speed': speed.name,
@@ -123,6 +178,11 @@ class AppSettings extends ChangeNotifier {
       'cardBack': cardBack.name,
       'cardFaces': cardFaces.name,
       'felt': felt.name,
+      'nickname': nickname,
+      'serverUrl': serverUrl,
+      'publicAddress': publicAddress,
+      if (_device.isNotEmpty) 'device': _device,
+      'rejoin': ?rejoin.value?.toJson(),
     });
   }
 }

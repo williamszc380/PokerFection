@@ -40,7 +40,6 @@ class PostflopTracker {
     required this.bigBlind,
     this.raiseRule = RaiseRule.standard,
     this.heroSeat = -1,
-    this.sizes = PostflopSpec.defaultHeroSizes,
   });
 
   final PreflopTracker preflop;
@@ -48,9 +47,8 @@ class PostflopTracker {
   final int bigBlind;
   final RaiseRule raiseRule;
 
-  /// The user's seat (-1 if no user plays): they get every size of [sizes].
+  /// The user's seat (-1 if no user plays): they get every raise size.
   final int heroSeat;
-  final List<double> sizes;
 
   /// Seats of the two players the solve plays: first to act after the flop,
   /// then last. [field] stands for all the opponents at once.
@@ -90,6 +88,10 @@ class PostflopTracker {
   }
 
   /// Call after every action: when a new street begins, starts solving it.
+  ///
+  /// Await it before the hand moves on: after waiting for the street just
+  /// played to be solved, it reads the hand as it is then (and a second
+  /// call for the same street would narrow the ranges twice).
   Future<void> update(PokerHand hand) async {
     if (unavailable != null || hand.street == Street.preflop || hand.street == _street) return;
     if (hand.isOver || hand.toAct == null) {
@@ -162,7 +164,6 @@ class PostflopTracker {
       bigBlind: bigBlind,
       raiseRule: raiseRule,
       hero: _seats!.indexOf(heroSeat),
-      heroSizes: sizes,
     );
     _solution = null;
     _pending = solve(spec, [Float64List.fromList(_ranges![0]), Float64List.fromList(_ranges![1])])
@@ -384,10 +385,13 @@ class PostflopTracker {
     return node is PostflopDecision && node.player == _seats!.indexOf(toAct) ? node : null;
   }
 
-  /// The GTO answer for the player to act, or null (not solved yet, or not
-  /// covered). For the user: every choice of their menu (see [actionMenu]),
-  /// the ones not allowed here greyed out. For a bot: the choices it has.
+  /// The GTO answer for the player to act, or null (not solved yet, not
+  /// covered, or their cards are unknown here: see [PokerHand.mirror]).
+  /// For the user: every choice of their menu (see [actionMenu]), the ones
+  /// not allowed here greyed out. For a bot: the choices it has.
   SpotStrategy? spotFor(PokerHand hand) {
+    final toAct = hand.toAct;
+    if (toAct == null || !hand.knows(toAct)) return null;
     final node = _decision(hand);
     if (node == null) return null;
     final solution = _solution!;
@@ -404,7 +408,7 @@ class PostflopTracker {
 
     if (node.player == spec.hero) {
       return answerFor(
-        actionMenu(hand, preflopSizes: const [], postflopSizes: spec.heroSizes),
+        actionMenu(hand),
         handName: handName,
         indexOf: (choice) => node.actions.indexWhere((a) => switch (choice.kind) {
               SpotActionKind.fold => a.move == PostflopMove.fold,

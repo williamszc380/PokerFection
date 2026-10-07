@@ -42,7 +42,7 @@ class StrategyComparison extends StatelessWidget {
           columnWidths: const {
             0: FlexColumnWidth(),
             1: FixedColumnWidth(60),
-            2: FixedColumnWidth(48),
+            2: FixedColumnWidth(64),
             3: FixedColumnWidth(72),
           },
           defaultVerticalAlignment: TableCellVerticalAlignment.middle,
@@ -86,7 +86,8 @@ class StrategyComparison extends StatelessWidget {
           const SizedBox(width: 6),
           Flexible(
             child: Text(
-              spotActionLabel(s, action),
+              // Raise sizes: just the amount, as in the list of choices.
+              action.kind == SpotActionKind.raise ? formatBb(action.amount, unit: true) : spotActionLabel(s, action),
               overflow: TextOverflow.ellipsis,
               style: TextStyle(color: dim, fontWeight: played == i ? FontWeight.w700 : null),
             ),
@@ -96,7 +97,7 @@ class StrategyComparison extends StatelessWidget {
         ]),
       ),
       Text(action.available ? percent(mix[i]) : '–', textAlign: TextAlign.right, style: TextStyle(color: dim)),
-      Text(action.available ? percent(spot.frequencies[i]) : '–',
+      Text(action.available ? gtoPercent(spot.frequencies[i]) : '–',
           textAlign: TextAlign.right, style: TextStyle(color: dim)),
       // How much this action gives up compared with the best one (0 for the best).
       Text(
@@ -126,7 +127,7 @@ class StrategyComparison extends StatelessWidget {
         ]),
       ),
       Text(allowed.isEmpty ? '–' : percent(total(mix)), textAlign: TextAlign.right, style: style),
-      Text(allowed.isEmpty ? '–' : percent(total(spot.frequencies)), textAlign: TextAlign.right, style: style),
+      Text(allowed.isEmpty ? '–' : gtoPercent(total(spot.frequencies)), textAlign: TextAlign.right, style: style),
       const SizedBox.shrink(),
     ]);
   }
@@ -139,14 +140,18 @@ class StrategyComparison extends StatelessWidget {
       );
 }
 
+/// Fold's color, and check's or call's.
+const foldColor = Color(0xFF5C7FA3);
+const passiveColor = Color(0xFF43A047);
+
 /// Colors per action: blue for fold, green for check/call, warmer for bigger bets.
 Color actionColor(List<SpotAction> actions, int index) {
   final action = actions[index];
   switch (action.kind) {
     case SpotActionKind.fold:
-      return const Color(0xFF5C7FA3);
+      return foldColor;
     case SpotActionKind.check || SpotActionKind.call:
-      return const Color(0xFF43A047);
+      return passiveColor;
     case SpotActionKind.allIn:
       return const Color(0xFFB71C1C);
     case SpotActionKind.raise:
@@ -226,3 +231,6 @@ Color gradeColor(DecisionGrade grade) => switch (grade) {
       DecisionGrade.mistake => const Color(0xFFEF6C00),
       DecisionGrade.blunder => const Color(0xFFC62828),
     };
+
+/// GTO's frequency as a percentage with two decimals: "35.27%".
+String gtoPercent(double frequency) => '${(frequency * 100).toStringAsFixed(2)}%';

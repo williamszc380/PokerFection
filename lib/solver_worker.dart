@@ -1,9 +1,11 @@
 /// The solvers' Web Worker, for the web version (browsers have no isolates).
 ///
-/// Compiled on its own into build/web/solver_worker.js by
-/// tool/build_web.dart. The page asks one worker for each solve (see
-/// background_solve_web.dart), and that worker spreads the work over more
-/// copies of itself, as native builds do with isolates (see branches.dart).
+/// Compiled on its own by tool/build_web.dart, to WebAssembly
+/// (build/web/solver_worker.wasm, started by solver_worker_wasm.js) and to
+/// JavaScript (solver_worker.js) for browsers that can't run that. The page
+/// asks one worker for each solve (see background_solve_web.dart), and that
+/// worker spreads the work over more copies of itself, as native builds do
+/// with isolates (see branches.dart).
 library;
 
 import 'dart:async';
@@ -38,16 +40,15 @@ void main() {
             request.t,
             request.last,
             request.active.toDart,
-            request.reach.toDart,
-            request.mass.toDart,
+            request.reach.toSolver,
+            request.mass.toSolver,
           );
-          _reply(SolverReply(kind: 'walked', walked: values.toJS));
+          final walked = values.toJS;
+          _reply(SolverReply(kind: 'walked', walked: walked), transferOf([walked]));
         case 'export':
           final (offsets, average, values) = branches!.export();
-          _reply(
-            SolverReply(kind: 'exported', offsets: offsets.toJS, average: average.toJS, ownedValues: values.toJS),
-            [offsets.buffer.toJS, average.buffer.toJS, values.buffer.toJS],
-          );
+          final (o, a, v) = (offsets.toJS, average.toJS, values.toJS);
+          _reply(SolverReply(kind: 'exported', offsets: o, average: a, ownedValues: v), transferOf([o, a, v]));
       }
     } catch (error, stack) {
       _reply(SolverReply(kind: 'failed', error: '$error\n$stack'));
@@ -75,10 +76,10 @@ Future<void> _solvePreflop(SolverRequest request) async {
   final ranges = request.ranges.toDart;
   final solution = await solvePreflopInParallel(
     request.preflopSpec,
-    PreflopEquity(request.equity.toDart),
+    PreflopEquity(request.equity.toSolver),
     iterations: request.iterations,
     threads: _threads(request),
-    ranges: ranges.isEmpty ? null : ranges.single.toDart,
+    ranges: ranges.isEmpty ? null : ranges.single.toSolver,
     onProgress: (done, total) {
       if (done % 5 == 0 || done == total) _reply(SolverReply(kind: 'progress', progress: done / total));
     },
@@ -89,14 +90,14 @@ Future<void> _solvePreflop(SolverRequest request) async {
 Future<void> _solvePostflop(SolverRequest request) async {
   final solution = await solvePostflopInParallel(
     request.postflopSpec,
-    [for (final r in request.ranges.toDart) r.toDart],
+    [for (final r in request.ranges.toDart) r.toSolver],
     iterations: request.iterations,
     threads: _threads(request),
   );
   _replySolved(solution.strategy, solution.values);
 }
 
-void _replySolved(Float32List strategy, Float32List values) => _reply(
-      SolverReply(kind: 'solved', strategy: strategy.toJS, values: values.toJS),
-      [strategy.buffer.toJS, values.buffer.toJS],
-    );
+void _replySolved(Float32List strategy, Float32List values) {
+  final (s, v) = (strategy.toJS, values.toJS);
+  _reply(SolverReply(kind: 'solved', strategy: s, values: v), transferOf([s, v]));
+}
