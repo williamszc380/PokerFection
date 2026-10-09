@@ -3,7 +3,9 @@ import 'dart:typed_data';
 
 import '../branches.dart';
 import '../combos.dart';
+import '../vectors.dart';
 import 'postflop_tree.dart';
+import 'same_rank_wins.dart';
 import 'showdown.dart';
 
 /// The hands possible on a board: every two-card combination that doesn't
@@ -62,6 +64,27 @@ List<List<int>> runoutBoards(List<int> board, {int flopRunouts = 40}) {
       return [for (final (turn, river) in pairs.take(flopRunouts)) [...board, turn, river]];
   }
 }
+
+/// On a turn [board]: the rivers that rank every hand alike, in groups of
+/// one rank (2 to 4 rivers) whose suits can't give anyone a flush (see
+/// [RunoutRanking.sameRank]). The solver shows each group down at once.
+List<List<int>> sameRankRivers(List<int> board) {
+  final byRank = <int, List<int>>{};
+  for (var river = 0; river < 52; river++) {
+    if (board.contains(river)) continue;
+    // A river of a suit the board already has twice could make a flush.
+    if (board.where((c) => c & 3 == river & 3).length < 2) (byRank[river >> 2] ??= []).add(river);
+  }
+  return [for (final rivers in byRank.values) if (rivers.length >= 2) rivers];
+}
+
+/// About how many passes over the hands a showdown on [board] takes (for
+/// both players at once): one per runout or group of [sameRankRivers].
+int showdownPasses(List<int> board, {int flopRunouts = 40}) => switch (board.length) {
+      5 => 1,
+      4 => sameRankRivers(board).fold(48, (passes, rivers) => passes - rivers.length + 1),
+      _ => flopRunouts,
+    };
 
 /// "The field" for approximate answers when more than two players are in
 /// the pot: all the opponents' hands in one range, each weighted by how
@@ -148,7 +171,14 @@ class PostflopSolution {
 /// betting of later streets isn't modeled: when the street's betting ends,
 /// each hand gets its equity share of the pot over the cards still to come
 /// (all rivers on the turn; a sample of turn/river pairs on the flop).
-/// The next street is solved again when it is reached.
+/// The next street is solved again when it is reached. On the turn, rivers
+/// that rank every hand alike are shown down together (see
+/// [sameRankRivers]).
+///
+/// Strategies, regrets and values are kept in 32-bit numbers, each hand
+/// vector padded to whole SIMD lanes, and the vector arithmetic is in
+/// vectors.dart (four hands at a time in native builds). Showdown sums are
+/// in 64-bit numbers.
 ///
 /// More players in the pot (a greedy approximation): ranges after the first
 /// two belong to players who only check along to showdown. A hand then wins
@@ -166,8 +196,9 @@ class PostflopSolver implements BranchSolver {
       PostflopSolver.part(spec, ranges, flopRunouts: flopRunouts, othersFoldToBets: othersFoldToBets);
 
   /// Solves only the decisions in [owned] (all when null), for splitting the
-  /// work across threads; decisions in [frontier] are handled by workers
-  /// (see `solvePostflopInParallel`, and the preflop solver for details).
+  /// work across threads; the nodes in [frontier] are handled by workers
+  /// (see `solvePostflopInParallel`, and the preflop solver for details):
+  /// decisions by id, showdowns as `-1 - id` (see `PostflopWorkPlan`).
   factory PostflopSolver.part(
     PostflopSpec spec,
     List<Float64List> ranges, {
@@ -178,28 +209,26 @@ class PostflopSolver implements BranchSolver {
   }) {
     final hands = PostflopHands(spec.board);
     final tree = PostflopTree(spec, hands: hands.length);
-    final n = hands.length;
-    final width = tree.decisions.fold(1, (m, d) => max(m, d.actions.length)) * n;
+    final n = hands.length, s = roundUpToLanes(n);
+    final width = tree.decisions.fold(1, (m, d) => max(m, d.actions.length)) * s;
     final count = tree.decisions.length;
     final offsets = Int32List(count)..fillRange(0, count, -1);
     var storage = 0;
-    if (owned == null) {
-      for (final node in tree.decisions) {
-        offsets[node.id] = node.offset;
-      }
-      storage = tree.storageSize;
-    } else {
-      for (final id in owned.toList()..sort()) {
-        offsets[id] = storage;
-        storage += tree.decisions[id].actions.length * n;
-      }
+    for (final id in owned == null ? [for (final d in tree.decisions) d.id] : (owned.toList()..sort())) {
+      offsets[id] = storage;
+      storage += tree.decisions[id].actions.length * s;
     }
     final slots = Int32List(count)..fillRange(0, count, -1);
+    final terminalSlots = Int32List(tree.terminals.length)..fillRange(0, tree.terminals.length, -1);
     for (var i = 0; i < frontier.length; i++) {
-      slots[frontier[i]] = i;
+      if (frontier[i] >= 0) {
+        slots[frontier[i]] = i;
+      } else {
+        terminalSlots[-1 - frontier[i]] = i;
+      }
     }
     return PostflopSolver._(spec, tree, hands, ranges, flopRunouts, n, width, _depthOf(tree.root) + 2,
-        offsets, storage, slots, frontier.length, othersFoldToBets);
+        offsets, storage, slots, terminalSlots, frontier.length, othersFoldToBets);
   }
 
   PostflopSolver._(
@@ -211,42 +240,47 @@ class PostflopSolver implements BranchSolver {
     int n,
     int width,
     int depth,
-    this.offsets,
+    this._offsets,
     int storage,
     this._slots,
+    this._terminalSlots,
     int frontierCount,
     this._othersFoldToBets,
   )   : _n = n,
+        _s = roundUpToLanes(n),
         _width = width,
-        _regrets = Float64List(storage),
-        _strategySum = Float64List(storage),
-        _average = Float64List(storage),
-        _values = Float64List(storage),
+        _regrets = Vec(storage),
+        _strategySum = Vec(storage),
+        _average = Vec(storage),
+        _values = Vec(storage),
         frontierReach = Float64List(frontierCount * 2 * n),
         frontierMass = Float64List(frontierCount * 2),
         frontierActive = Uint8List(frontierCount),
         frontierValues = Float64List(frontierCount * 2 * n),
-        _out = Float64List(depth * 2 * n),
+        _out = Vec(depth * 2 * roundUpToLanes(n)),
         _mass = Float64List(depth * 2),
-        _reach = Float64List((2 + depth) * n),
+        _reach = Vec((2 + depth) * roundUpToLanes(n)),
         _reachAt = Int32List(depth * 2),
-        _actionValues = Float64List(depth * width),
-        _strategy = Float64List(depth * width),
+        _actionValues = Vec(depth * width),
+        _strategy = Vec(depth * width),
         _acc = Float64List(n),
-        _winsOnRunout = Float64List(n),
+        _accQ = Float64List(n),
         _valid = Float64List(n),
         _weights = Float64List(n),
-        _rootReach = Float64List(2 * n),
-        _lastValues = Float64List(storage),
-        _tremble = Float64List(storage),
+        _weightsQ = Float64List(n),
+        _sameRank = SameRankScratch(n),
+        _rootReach = Vec(2 * roundUpToLanes(n)),
+        _lastValues = Vec(storage),
+        _tremble = Vec(storage),
         _trembleFrom = Int32List(tree.decisions.length)..fillRange(0, tree.decisions.length, -1),
         _haveValues = Uint8List(tree.decisions.length) {
     for (var p = 0; p < 2; p++) {
       for (var c = 0; c < n; c++) {
-        _rootReach[p * n + c] = ranges[p][hands.full[c]];
+        _rootReach.f[p * _s + c] = ranges[p][hands.full[c]];
       }
     }
-    _setUpRunouts(flopRunouts);
+    // Players checking along beat each river differently: no groups then.
+    _setUpRunouts(flopRunouts, groupRivers: ranges.length <= 2);
     if (ranges.length > 2) _setUpOthers(ranges.sublist(2));
   }
 
@@ -293,12 +327,20 @@ class PostflopSolver implements BranchSolver {
   final PostflopTree tree;
   final PostflopHands hands;
   final int _n;
+
+  /// Numbers per hand vector in this solver's arrays: the hands rounded up
+  /// to whole SIMD lanes (the extra ones are never reached).
+  final int _s;
   final int _width;
 
-  /// Where each decision's numbers start in this solver's arrays (-1 if not owned).
-  @override
-  final Int32List offsets;
+  /// Where each decision's numbers start in this solver's arrays (-1 if not
+  /// owned): actions one after the other, [_s] numbers each.
+  final Int32List _offsets;
+
+  /// Each frontier node's slot (-1 when not on the frontier): decisions by
+  /// id, and showdowns by [PostflopTerminal.id].
   final Int32List _slots;
+  final Int32List _terminalSlots;
 
   /// For each frontier decision: both players' reach (2 x hands), their
   /// masses, whether it was reached, and the values workers computed.
@@ -307,25 +349,35 @@ class PostflopSolver implements BranchSolver {
   final Uint8List frontierActive;
   final Float64List frontierValues;
   bool _collecting = false;
-  final Float64List _regrets;
-  final Float64List _strategySum;
-  final Float64List _average;
-  final Float64List _values;
-  final Float64List _out;
+  final Vec _regrets;
+  final Vec _strategySum;
+  final Vec _average;
+  final Vec _values;
+  final Vec _out;
   final Float64List _mass;
-  final Float64List _reach;
+  final Vec _reach;
   final Int32List _reachAt;
-  final Float64List _actionValues;
-  final Float64List _strategy;
+  final Vec _actionValues;
+  final Vec _strategy;
   final Float64List _acc;
-  final Float64List _winsOnRunout;
+  final Float64List _accQ;
   final Float64List _valid;
   final Float64List _weights;
-  final Float64List _rootReach;
+  final Float64List _weightsQ;
+  final SameRankScratch _sameRank;
+  final _scratch = ShowdownScratch();
+  final Vec _rootReach;
   final Float64List _cardSum = Float64List(52);
   final Float64List _below = Float64List(52);
   final Float64List _group = Float64List(52);
   final List<RunoutRanking> _runouts = [];
+
+  /// On the turn, the groups of [sameRankRivers] (their rivers aren't in
+  /// [_runouts]): each one's ranking, and for each hand how many of its
+  /// rivers the hand holds and how many it can see.
+  final List<RunoutRanking> _riverGroups = [];
+  final List<Float64List> _held = [];
+  final List<Float64List> _seen = [];
 
   /// How many runouts each pair of hands shares (to turn sums into averages).
   double _runoutsPerPair = 1;
@@ -340,8 +392,8 @@ class PostflopSolver implements BranchSolver {
   /// action values from the last iteration (same layout as [_regrets]),
   /// the extra weights, when they were last worked out, and whether a
   /// decision has values yet.
-  final Float64List _lastValues;
-  final Float64List _tremble;
+  final Vec _lastValues;
+  final Vec _tremble;
   final Int32List _trembleFrom;
   final Uint8List _haveValues;
 
@@ -356,11 +408,24 @@ class PostflopSolver implements BranchSolver {
         PostflopDecision() => 1 + node.children.map(_depthOf).reduce(max),
       };
 
-  void _setUpRunouts(int flopRunouts) {
+  void _setUpRunouts(int flopRunouts, {required bool groupRivers}) {
     final board = spec.board;
     final boards = runoutBoards(board, flopRunouts: flopRunouts);
+    final groups = board.length == 4 && groupRivers ? sameRankRivers(board) : const <List<int>>[];
+    final grouped = {for (final rivers in groups) ...rivers};
     for (final complete in boards) {
+      if (board.length == 4 && grouped.contains(complete[4])) continue;
       _runouts.add(RunoutRanking(complete, hands.cardA, hands.cardB));
+    }
+    for (final rivers in groups) {
+      _riverGroups.add(RunoutRanking.sameRank(board, rivers, hands.cardA, hands.cardB));
+      final held = Float64List(_n), seen = Float64List(_n);
+      for (var c = 0; c < _n; c++) {
+        held[c] = rivers.where((r) => r == hands.cardA[c] || r == hands.cardB[c]).length.toDouble();
+        seen[c] = rivers.length - held[c];
+      }
+      _held.add(held);
+      _seen.add(seen);
     }
     final free = 52 - board.length;
     _runoutsPerPair = switch (board.length) {
@@ -379,7 +444,21 @@ class PostflopSolver implements BranchSolver {
     }
     beginFinalPass();
     _walkFromRoot();
-    return PostflopSolution(tree, hands, Float32List.fromList(_average), Float32List.fromList(_values));
+    final strategy = Float32List(tree.storageSize), values = Float32List(tree.storageSize);
+    for (final node in tree.decisions) {
+      _copyOut(node, _average, strategy, node.offset);
+      _copyOut(node, _values, values, node.offset);
+    }
+    return PostflopSolution(tree, hands, strategy, values);
+  }
+
+  /// Copies [node]'s numbers from [from] (this solver's layout) to [to] at
+  /// [at], one per hand for each action.
+  void _copyOut(PostflopDecision node, Vec from, List<double> to, int at) {
+    final n = _n, offset = _offsets[node.id];
+    for (var i = 0; i < node.actions.length; i++) {
+      to.setRange(at + i * n, at + (i + 1) * n, from.f, offset + i * _s);
+    }
   }
 
   /// Sets the discounting for iteration [t] (counting from 1).
@@ -393,31 +472,45 @@ class PostflopSolver implements BranchSolver {
   /// Computes the average strategies; later walks use them and record values.
   @override
   void beginFinalPass() {
-    final n = _n;
     for (final node in tree.decisions) {
-      final offset = offsets[node.id];
-      if (offset < 0) continue;
-      final a = node.actions.length;
-      for (var c = 0; c < n; c++) {
-        var total = 0.0;
-        for (var i = 0; i < a; i++) {
-          total += _strategySum[offset + i * n + c];
-        }
-        for (var i = 0; i < a; i++) {
-          final index = offset + i * n + c;
-          _average[index] = total > 0 ? _strategySum[index] / total : 1 / a;
-        }
-      }
+      final offset = _offsets[node.id];
+      if (offset >= 0) vNormalize(_strategySum, offset, _average, offset, node.actions.length, _s);
     }
-    _values.fillRange(0, _values.length, double.nan);
+    _values.f.fillRange(0, _values.length, double.nan);
     _finalPass = true;
   }
 
+  /// Where each owned decision's numbers start in [ownedAverage] and
+  /// [ownedValues] (one per hand for each action), or -1.
+  @override
+  late final Int32List offsets = () {
+    final at = Int32List(_offsets.length)..fillRange(0, _offsets.length, -1);
+    var size = 0;
+    for (final node in tree.decisions) {
+      if (_offsets[node.id] < 0) continue;
+      at[node.id] = size;
+      size += node.actions.length * _n;
+    }
+    return at;
+  }();
+
   /// Average strategies and values of the owned decisions (see [offsets]).
   @override
-  Float64List get ownedAverage => _average;
+  Float64List get ownedAverage => _owned(_average);
   @override
-  Float64List get ownedValues => _values;
+  Float64List get ownedValues => _owned(_values);
+
+  Float64List _owned(Vec from) {
+    var size = 0;
+    for (final node in tree.decisions) {
+      if (_offsets[node.id] >= 0) size += node.actions.length * _n;
+    }
+    final owned = Float64List(size);
+    for (final node in tree.decisions) {
+      if (_offsets[node.id] >= 0) _copyOut(node, from, owned, offsets[node.id]);
+    }
+    return owned;
+  }
 
   /// Coordinator, step 1: records each frontier decision's reach.
   void collectFrontier() {
@@ -430,8 +523,9 @@ class PostflopSolver implements BranchSolver {
   /// Coordinator, step 2: with [frontierValues] filled in, finishes the walk.
   void finishFromFrontier() => _walkFromRoot();
 
-  /// Worker: walks the branch starting at decision [nodeId], given both
-  /// players' reach and mass there, and writes both players' values into [out].
+  /// Worker: walks the branch starting at decision [nodeId] (or the
+  /// showdown `-1 - nodeId`), given both players' reach and mass there, and
+  /// writes both players' values into [out].
   @override
   void walkBranch(
     int nodeId,
@@ -445,21 +539,23 @@ class PostflopSolver implements BranchSolver {
     final n = _n;
     for (var p = 0; p < 2; p++) {
       _mass[p] = mass[massAt + p];
-      _reachAt[p] = p * n;
-      _reach.setRange(p * n, (p + 1) * n, reach, reachAt + p * n);
+      _reachAt[p] = p * _s;
+      _reach.f.setRange(p * _s, p * _s + n, reach, reachAt + p * n);
     }
-    _walk(tree.decisions[nodeId], 0);
-    out.setRange(outAt, outAt + 2 * n, _out);
+    _walk(nodeId >= 0 ? tree.decisions[nodeId] : tree.terminals[-1 - nodeId], 0);
+    for (var p = 0; p < 2; p++) {
+      out.setRange(outAt + p * n, outAt + (p + 1) * n, _out.f, p * _s);
+    }
   }
 
   void _walkFromRoot() {
-    final n = _n;
+    final n = _n, root = _rootReach.f;
     for (var p = 0; p < 2; p++) {
-      _reach.setRange(p * n, (p + 1) * n, _rootReach, p * n);
-      _reachAt[p] = p * n;
+      _reach.f.setRange(p * _s, (p + 1) * _s, root, p * _s);
+      _reachAt[p] = p * _s;
       var m = 0.0;
       for (var c = 0; c < n; c++) {
-        m += _rootReach[p * n + c];
+        m += root[p * _s + c];
       }
       _mass[p] = m;
     }
@@ -469,7 +565,12 @@ class PostflopSolver implements BranchSolver {
   void _walk(PostflopNode node, int depth) {
     switch (node) {
       case PostflopTerminal():
-        if (!_collecting) _terminal(node, depth);
+        final slot = _terminalSlots[node.id];
+        if (slot >= 0) {
+          _atFrontier(slot, depth);
+        } else if (!_collecting) {
+          _terminal(node, depth);
+        }
       case PostflopDecision():
         final slot = _slots[node.id];
         if (slot >= 0) {
@@ -487,30 +588,33 @@ class PostflopSolver implements BranchSolver {
       frontierActive[slot] = 1;
       for (var p = 0; p < 2; p++) {
         frontierMass[slot * 2 + p] = _mass[depth * 2 + p];
-        frontierReach.setRange(block + p * n, block + (p + 1) * n, _reach, _reachAt[depth * 2 + p]);
+        frontierReach.setRange(block + p * n, block + (p + 1) * n, _reach.f, _reachAt[depth * 2 + p]);
       }
       return;
     }
-    _out.setRange(depth * 2 * n, (depth + 1) * 2 * n, frontierValues, block);
+    for (var p = 0; p < 2; p++) {
+      final at = (depth * 2 + p) * _s;
+      _out.f.setRange(at, at + n, frontierValues, block + p * n);
+    }
   }
 
   void _decision(PostflopDecision node, int depth) {
-    final n = _n;
+    final s = _s;
     final p = node.player, q = 1 - p;
     final actions = node.actions.length;
     final out = _out, reach = _reach, strategy = _strategy, actionValues = _actionValues;
-    final outBase = depth * 2 * n;
-    final childOutBase = outBase + 2 * n;
+    final outBase = depth * 2 * s;
+    final childOutBase = outBase + 2 * s;
     final sBase = depth * _width;
     _fillStrategy(node, sBase);
-    out.fillRange(outBase, childOutBase, 0);
+    vFill(out, outBase, 2 * s, 0);
 
     final myReach = _reachAt[depth * 2 + p];
-    final childReach = (2 + depth) * n;
+    final childReach = (2 + depth) * s;
     _reachAt[(depth + 1) * 2 + p] = childReach;
     _reachAt[(depth + 1) * 2 + q] = _reachAt[depth * 2 + q];
     final opponentMass = _mass[depth * 2 + q];
-    final offset = offsets[node.id];
+    final offset = _offsets[node.id];
     final hero = p == spec.hero;
     final trembling = hero && !_finalPass && _haveValues[node.id] == 1;
     if (trembling) {
@@ -520,48 +624,36 @@ class PostflopSolver implements BranchSolver {
         _trembleFrom[node.id] = _iteration;
       }
     }
-    final tremble = _tremble;
+    final myOut = outBase + p * s, mine = childOutBase + p * s;
 
     for (var i = 0; i < actions; i++) {
-      final base = sBase + i * n;
-      final tBase = offset + i * n;
-      var reachSum = 0.0;
-      for (var c = 0; c < n; c++) {
-        final r = reach[myReach + c] * (trembling ? strategy[base + c] + tremble[tBase + c] : strategy[base + c]);
-        reach[childReach + c] = r;
-        reachSum += r;
-      }
+      final base = sBase + i * s;
+      final reachSum = vChildReach(reach, myReach, strategy, base, 0, trembling ? _tremble : null, offset + i * s,
+          reach, childReach, s);
       _mass[(depth + 1) * 2 + p] = reachSum;
       _mass[(depth + 1) * 2 + q] = opponentMass;
       if (opponentMass == 0 && reachSum == 0) {
-        actionValues.fillRange(base, base + n, 0);
+        vFill(actionValues, base, s, 0);
         continue;
       }
       _walk(node.children[i], depth + 1);
       if (_collecting) continue;
 
-      final mine = childOutBase + p * n, myOut = outBase + p * n;
-      for (var c = 0; c < n; c++) {
-        final v = out[mine + c];
-        actionValues[base + c] = v;
-        out[myOut + c] += strategy[base + c] * v;
-      }
-      if (reachSum == 0) continue;
-      final src = childOutBase + q * n, dst = outBase + q * n;
-      for (var c = 0; c < n; c++) {
-        out[dst + c] += out[src + c];
-      }
+      vTakeAction(out, mine, actionValues, base, out, myOut, strategy, base, s);
+      if (reachSum != 0) vAdd(out, outBase + q * s, out, childOutBase + q * s, s);
     }
 
     if (_collecting) return;
     if (hero) {
-      _lastValues.setRange(offset, offset + actions * n, actionValues, sBase);
+      _lastValues.f.setRange(offset, offset + actions * s, actionValues.f, sBase);
       _haveValues[node.id] = 1;
     }
     if (_finalPass) {
       _recordValues(node, depth, sBase);
     } else {
-      _update(node, myReach, sBase, outBase + p * n);
+      vUpdate(_regrets, _strategySum, offset, actionValues, sBase, out, myOut, reach, myReach, strategy, sBase,
+          actions, s,
+          positive: _positiveDiscount, negative: 0.5, keep: _strategyKeep);
     }
   }
 
@@ -572,12 +664,12 @@ class PostflopSolver implements BranchSolver {
   /// against a sensible range, so the value of a size GTO never uses is
   /// still meaningful. The user's own strategy and regrets are unaffected.
   void _fillTremble(PostflopDecision node, int myReach) {
-    final n = _n;
+    final n = _n, s = _s;
     final actions = node.actions.length;
-    final offset = offsets[node.id];
+    final offset = _offsets[node.id];
     // _acc is free here: it is only used while scoring endings.
-    final values = _lastValues, tremble = _tremble, reach = _reach, gap = _acc;
-    tremble.fillRange(offset, offset + actions * n, 0);
+    final values = _lastValues.f, tremble = _tremble.f, reach = _reach.f, gap = _acc;
+    tremble.fillRange(offset, offset + actions * s, 0);
     var total = 0.0;
     for (var c = 0; c < n; c++) {
       total += reach[myReach + c];
@@ -589,10 +681,10 @@ class PostflopSolver implements BranchSolver {
       for (var c = 0; c < n; c++) {
         var best = double.negativeInfinity;
         for (var j = 0; j < actions; j++) {
-          final v = values[offset + j * n + c];
+          final v = values[offset + j * s + c];
           if (v > best) best = v;
         }
-        final g = values[offset + i * n + c] - best;
+        final g = values[offset + i * s + c] - best;
         gap[c] = g;
         if (g < lowest) lowest = g;
       }
@@ -611,68 +703,33 @@ class PostflopSolver implements BranchSolver {
         }
       }
       for (var c = 0; c < n; c++) {
-        if (gap[c] >= low && reach[myReach + c] > 0) tremble[offset + i * n + c] = _trembleWeight;
+        if (gap[c] >= low && reach[myReach + c] > 0) tremble[offset + i * s + c] = _trembleWeight;
       }
     }
   }
 
   void _fillStrategy(PostflopDecision node, int sBase) {
-    final n = _n;
     final a = node.actions.length;
-    final offset = offsets[node.id];
-    final strategy = _strategy;
+    final offset = _offsets[node.id];
     if (_finalPass) {
-      final average = _average;
-      for (var k = 0; k < a * n; k++) {
-        strategy[sBase + k] = average[offset + k];
-      }
-      return;
-    }
-    final regrets = _regrets;
-    for (var c = 0; c < n; c++) {
-      var total = 0.0;
-      for (var i = 0; i < a; i++) {
-        final r = regrets[offset + i * n + c];
-        if (r > 0) total += r;
-      }
-      for (var i = 0; i < a; i++) {
-        final r = regrets[offset + i * n + c];
-        strategy[sBase + i * n + c] = total > 0 ? (r > 0 ? r / total : 0) : 1 / a;
-      }
-    }
-  }
-
-  void _update(PostflopDecision node, int myReach, int sBase, int nodeValue) {
-    const negativeDiscount = 0.5;
-    final n = _n;
-    final regrets = _regrets, sums = _strategySum, reach = _reach, out = _out;
-    final strategy = _strategy, actionValues = _actionValues;
-    final positiveDiscount = _positiveDiscount, keep = _strategyKeep;
-    final offset = offsets[node.id];
-    for (var i = 0; i < node.actions.length; i++) {
-      final base = i * n;
-      for (var c = 0; c < n; c++) {
-        final index = offset + base + c;
-        final r = regrets[index];
-        regrets[index] = r * (r > 0 ? positiveDiscount : negativeDiscount) +
-            actionValues[sBase + base + c] -
-            out[nodeValue + c];
-        sums[index] = sums[index] * keep + reach[myReach + c] * strategy[sBase + base + c];
-      }
+      _strategy.f.setRange(sBase, sBase + a * _s, _average.f, offset);
+    } else {
+      vRegretMatch(_regrets, offset, _strategy, sBase, a, _s);
     }
   }
 
   /// Turns counterfactual values into chips, given that the opponent's
   /// cards (not clashing with the hand) and actions led here.
   void _recordValues(PostflopDecision node, int depth, int sBase) {
-    final n = _n;
+    final n = _n, s = _s;
     final q = 1 - node.player;
     _disjointWeight(_reachAt[depth * 2 + q]);
-    final values = _values, actionValues = _actionValues, valid = _valid;
+    final values = _values.f, actionValues = _actionValues.f, valid = _valid;
+    final offset = _offsets[node.id];
     for (var i = 0; i < node.actions.length; i++) {
       for (var c = 0; c < n; c++) {
         final v = valid[c];
-        if (v > 0) values[offsets[node.id] + i * n + c] = actionValues[sBase + i * n + c] / v;
+        if (v > 0) values[offset + i * s + c] = actionValues[sBase + i * s + c] / v;
       }
     }
   }
@@ -680,7 +737,7 @@ class PostflopSolver implements BranchSolver {
   /// `_valid[c]`: the opponent's weight on hands sharing no card with c.
   void _disjointWeight(int weightsAt) {
     final n = _n;
-    final reach = _reach, cardSum = _cardSum, valid = _valid;
+    final reach = _reach.f, cardSum = _cardSum, valid = _valid;
     final a = hands.cardA, b = hands.cardB;
     cardSum.fillRange(0, 52, 0);
     var total = 0.0;
@@ -697,57 +754,67 @@ class PostflopSolver implements BranchSolver {
 
   void _terminal(PostflopTerminal t, int depth) {
     final n = _n;
-    final out = _out;
+    final out = _out.f;
     final potEnd = spec.pot + t.bets[0] + t.bets[1];
+    // With others folding to bets, only a checked-down pot has to beat them.
+    final beatOthers = _othersFoldToBets && (t.bets[0] > 0 || t.bets[1] > 0) ? null : _beatOthersOnAverage;
+    if (t.foldedBy < 0) {
+      if (_mass[depth * 2] > 0 || _mass[depth * 2 + 1] > 0) {
+        _showdown(t, depth, potEnd, beatOthers != null);
+      } else {
+        out.fillRange(depth * 2 * _s, (depth * 2 + 2) * _s, 0);
+      }
+      return;
+    }
     for (var p = 0; p < 2; p++) {
       final q = 1 - p;
-      final outBase = (depth * 2 + p) * n;
+      final outBase = (depth * 2 + p) * _s;
       if (_mass[depth * 2 + q] == 0) {
         out.fillRange(outBase, outBase + n, 0);
         continue;
       }
-      final weightsAt = _reachAt[depth * 2 + q];
-      _disjointWeight(weightsAt);
+      _disjointWeight(_reachAt[depth * 2 + q]);
       final valid = _valid;
-      // With others folding to bets, only a checked-down pot has to beat them.
-      final beatOthers =
-          _othersFoldToBets && (t.bets[0] > 0 || t.bets[1] > 0) ? null : _beatOthersOnAverage;
-      if (t.foldedBy >= 0) {
-        if (t.foldedBy == p || beatOthers == null) {
-          final u = (t.foldedBy == p ? -t.bets[p] : potEnd - t.bets[p]).toDouble();
-          for (var c = 0; c < n; c++) {
-            out[outBase + c] = u * valid[c];
-          }
-        } else {
-          // The pot, if this hand also beats the players checking along.
-          for (var c = 0; c < n; c++) {
-            out[outBase + c] = (potEnd * beatOthers[c] - t.bets[p]) * valid[c];
-          }
-        }
-        continue;
-      }
-      final acc = _acc, weights = _weights;
-      acc.fillRange(0, n, 0);
-      weights.setRange(0, n, _reach, weightsAt);
-      if (beatOthers == null) {
-        for (final runout in _runouts) {
-          addShowdownWins(runout, weights, acc, hands.cardA, hands.cardB, _below, _group);
+      if (t.foldedBy == p || beatOthers == null) {
+        final u = (t.foldedBy == p ? -t.bets[p] : potEnd - t.bets[p]).toDouble();
+        for (var c = 0; c < n; c++) {
+          out[outBase + c] = u * valid[c];
         }
       } else {
-        final wins = _winsOnRunout;
-        for (var r = 0; r < _runouts.length; r++) {
-          wins.fillRange(0, n, 0);
-          addShowdownWins(_runouts[r], weights, wins, hands.cardA, hands.cardB, _below, _group);
-          final beat = _beatOthers[r];
-          for (var c = 0; c < n; c++) {
-            acc[c] += wins[c] * beat[c];
-          }
+        // The pot, if this hand also beats the players checking along.
+        for (var c = 0; c < n; c++) {
+          out[outBase + c] = (potEnd * beatOthers[c] - t.bets[p]) * valid[c];
         }
       }
-      final scale = potEnd / _runoutsPerPair;
+    }
+  }
+
+  /// A showdown: both players' values, with one pass over each runout for
+  /// the two of them (a player whose opponent never gets here gets 0). With
+  /// [beatOthers], a hand also has to beat the players checking along.
+  void _showdown(PostflopTerminal t, int depth, int potEnd, bool beatOthers) {
+    final n = _n;
+    final out = _out.f;
+    final weights0 = _weights, weights1 = _weightsQ, wins0 = _acc, wins1 = _accQ;
+    weights0.setRange(0, n, _reach.f, _reachAt[depth * 2]);
+    weights1.setRange(0, n, _reach.f, _reachAt[depth * 2 + 1]);
+    wins0.fillRange(0, n, 0);
+    wins1.fillRange(0, n, 0);
+    for (var r = 0; r < _runouts.length; r++) {
+      addShowdownWinsForBoth(_runouts[r], weights0, weights1, wins0, wins1, _scratch,
+          scale: beatOthers ? _beatOthers[r] : null);
+    }
+    for (var g = 0; g < _riverGroups.length; g++) {
+      addSameRankWins(_riverGroups[g], weights0, weights1, _held[g], _seen[g], wins0, wins1, _sameRank);
+    }
+    final scale = potEnd / _runoutsPerPair;
+    for (var p = 0; p < 2; p++) {
+      _disjointWeight(_reachAt[depth * 2 + 1 - p]);
+      final valid = _valid, wins = p == 0 ? wins0 : wins1;
+      final outBase = (depth * 2 + p) * _s;
       final bet = t.bets[p].toDouble();
       for (var c = 0; c < n; c++) {
-        out[outBase + c] = scale * acc[c] - bet * valid[c];
+        out[outBase + c] = scale * wins[c] - bet * valid[c];
       }
     }
   }

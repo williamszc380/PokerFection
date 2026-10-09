@@ -45,7 +45,7 @@ import 'timing.dart';
 
 /// The version of these messages. A device with another one can't join,
 /// nor one with other betting rules ([rulesVersion]).
-const protocolVersion = 6;
+const protocolVersion = 7;
 
 /// The port a game server listens on unless told otherwise (a host's app
 /// takes one of the next few when it is taken). Also where hosts answer
@@ -509,6 +509,7 @@ sealed class ClientMessage {
       'removeBot' => RemoveBot(m.seat('s')),
       'usedHelp' => UsedHelp(hand: m.integer('hand', min: 1), turnId: m.integer('turnId', min: 1)),
       'peek' => Peek(hand: m.integer('hand', min: 1), seat: m.seat('s')),
+      'show' => ShowCards(hand: m.integer('hand', min: 1)),
       'act' => Act(
         hand: m.integer('hand', min: 1),
         turnId: m.integer('turnId', min: 1),
@@ -698,6 +699,17 @@ class Peek extends ClientMessage {
   Map<String, Object?> toJson() => {'t': 'peek', 'hand': hand, 's': seat};
 }
 
+/// Once hand [hand] is over (until the next is dealt), the player shows
+/// their own cards to everyone: they all get [CardsShown].
+class ShowCards extends ClientMessage {
+  const ShowCards({required this.hand});
+
+  final int hand;
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'show', 'hand': hand};
+}
+
 /// A player's move at turn [turnId] of hand [hand].
 class Act extends ClientMessage {
   const Act({required this.hand, required this.turnId, required this.action});
@@ -857,6 +869,7 @@ sealed class ServerMessage {
         next: m['next'] == null ? null : NextHand._fromJson(m.object('next')),
       ),
       'peekCards' => PeekCards(hand: m.integer('hand', min: 1), seat: m.seat('s'), cards: _Json.holeCards(m['cards'])),
+      'shown' => CardsShown(hand: m.integer('hand', min: 1), seat: m.seat('s'), cards: _Json.holeCards(m['cards'])),
       'notice' => Notice(
         kind: m.named('kind', NoticeKind.values),
         hand: m.integer('hand', min: 1),
@@ -1191,6 +1204,24 @@ class PeekCards extends ServerMessage {
   @override
   Map<String, Object?> toJson() => {
     't': 'peekCards',
+    'hand': hand,
+    's': seat,
+    'cards': [for (final c in cards) c.index],
+  };
+}
+
+/// To everyone at the table: the player in room seat [seat] showed their
+/// [cards] after hand [hand] (see [ShowCards]).
+class CardsShown extends ServerMessage {
+  const CardsShown({required this.hand, required this.seat, required this.cards});
+
+  final int hand;
+  final int seat;
+  final List<PlayingCard> cards;
+
+  @override
+  Map<String, Object?> toJson() => {
+    't': 'shown',
     'hand': hand,
     's': seat,
     'cards': [for (final c in cards) c.index],

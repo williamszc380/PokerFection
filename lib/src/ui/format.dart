@@ -36,7 +36,7 @@ String formatWait(S s, Duration wait) {
   return s.waitTime((days / 365.25).round(), WaitUnit.years);
 }
 
-/// Like [formatBb] but always with a sign: "+2.5 BB", "-1 BB", "0 BB".
+/// Like [formatBb] but always with a sign: "+2.50 BB", "-1.00 BB", "0.00 BB".
 String formatSignedBb(int chips) {
   final sign = chips > 0 ? '+' : (chips < 0 ? '-' : '');
   return '$sign${formatBb(chips.abs(), unit: true)}';

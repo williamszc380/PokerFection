@@ -29,8 +29,6 @@ class StringsEn extends S {
   @override
   String get copyInviteLink => 'Copy invite link';
   @override
-  String get copyBrowserLink => 'Copy browser link';
-  @override
   String get noInvite => 'No invite or room code on the clipboard.';
   @override
   String get inviteThisComputer => 'This server runs on this computer, so only this computer can join.';
@@ -573,6 +571,10 @@ class StringsEn extends S {
   String get seeCards => 'See Cards';
   @override
   String seeCardsQuestion(String name) => "See $name's cards? Everyone is told.";
+  @override
+  String get showMyCards => 'Show My Cards';
+  @override
+  String showNotice(String? name, String cards) => name == null ? 'You show $cards' : '$name shows $cards';
   @override
   String helpNotice(String? name) => name == null ? 'You used GTO help' : '$name used GTO help';
   @override

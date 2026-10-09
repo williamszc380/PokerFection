@@ -137,6 +137,9 @@ class PostflopTerminal extends PostflopNode {
 
   /// Someone is all-in: the remaining cards are dealt with no more betting.
   final bool allIn;
+
+  /// Index in [PostflopTree.terminals].
+  late final int id;
 }
 
 /// Every betting sequence on one street.
@@ -229,7 +232,7 @@ class PostflopTree {
       bets: List.unmodifiable(bets),
       foldedBy: s.foldedBy,
       allIn: s.foldedBy < 0 && (spec.stacks[0] == bets[0] || spec.stacks[1] == bets[1]),
-    );
+    )..id = terminals.length;
     terminals.add(node);
     return node;
   }

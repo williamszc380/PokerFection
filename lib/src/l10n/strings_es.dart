@@ -29,8 +29,6 @@ class StringsEs extends S {
   @override
   String get copyInviteLink => 'Copiar enlace de invitación';
   @override
-  String get copyBrowserLink => 'Copiar enlace para navegador';
-  @override
   String get noInvite => 'No hay invitación ni código de sala en el portapapeles.';
   @override
   String get inviteThisComputer => 'Este servidor está en esta computadora, así que solo ella puede unirse.';
@@ -577,6 +575,10 @@ class StringsEs extends S {
   String get seeCards => 'Ver cartas';
   @override
   String seeCardsQuestion(String name) => '¿Ver las cartas de $name? Todos se enteran.';
+  @override
+  String get showMyCards => 'Mostrar mis cartas';
+  @override
+  String showNotice(String? name, String cards) => name == null ? 'Muestras $cards' : '$name muestra $cards';
   @override
   String helpNotice(String? name) => name == null ? 'Usaste la ayuda GTO' : '$name usó la ayuda GTO';
   @override

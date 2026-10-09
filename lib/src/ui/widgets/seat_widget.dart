@@ -206,7 +206,7 @@ class SeatWidget extends StatelessWidget {
           ),
           // Online, out of chips: "Out" for the stack.
           Text(
-            seat.out ? s.outBadge : (seat.allIn && seat.stack == 0 ? s.allInBadge : formatBb(seat.stack, unit: true)),
+            seat.out ? s.outBadge : (seat.allIn && seat.stack == 0 ? s.allInBadge : formatBb(seat.stack)),
             style: TextStyle(
               color: seat.out || (seat.allIn && seat.stack == 0) ? const Color(0xFFFF8A65) : Colors.white,
               fontSize: 12.5 * g.scale,

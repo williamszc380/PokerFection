@@ -16,18 +16,22 @@ int get _threads => min(max(web.window.navigator.hardwareConcurrency - 1, 1), 12
 
 /// Solves [spec] in a Web Worker, which spreads the work over the CPU's
 /// cores (more workers), reporting progress 0-1. [ranges]: see [PreflopSolver].
+/// With [warmFrom], starts from that solution of a similar game (see
+/// [warmStrategies]).
 Future<PreflopSolution> solveInBackground(
   PreflopSpec spec,
   PreflopEquity equity,
   int iterations,
   void Function(double progress) onProgress, {
   Float64List? ranges,
+  PreflopSolution? warmFrom,
 }) async {
   final tree = PreflopTree(spec);
-  final request = SolverRequest.preflop(spec, equity.values, iterations: iterations, threads: _threads, ranges: ranges);
+  final request = SolverRequest.preflop(spec, equity.values,
+      iterations: iterations, threads: _threads, ranges: ranges, warmFrom: warmFrom);
   final answer = await _solveInWorker(request, tree.storageSize, onProgress);
   if (answer != null) return PreflopSolution(tree, answer.$1, answer.$2);
-  return PreflopSolver(tree, equity, ranges: ranges)
+  return PreflopSolver(tree, equity, ranges: ranges, warm: warmFrom == null ? null : warmStrategies(tree, warmFrom))
       .solve(iterations: iterations, onProgress: (done, total) => onProgress(done / total));
 }
 

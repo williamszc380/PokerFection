@@ -402,8 +402,12 @@ class PostflopTracker {
     double frequency(int i) => solution.frequency(node, i, combo);
     double value(int i) {
       final v = solution.value(node, i, combo);
-      // Relative to folding now: add back what this player already bet on the street.
-      return v.isNaN ? double.nan : (v + node.bets[node.player]) / bigBlind;
+      if (v.isNaN) return double.nan;
+      // Folding now is the zero point (exactly, whatever the rounding of
+      // the solver's 32-bit numbers); otherwise add back what this player
+      // already bet on the street.
+      if (node.actions[i].move == PostflopMove.fold) return 0;
+      return (v + node.bets[node.player]) / bigBlind;
     }
 
     if (node.player == spec.hero) {

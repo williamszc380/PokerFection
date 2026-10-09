@@ -64,28 +64,41 @@ class PreflopWorkPlan {
 }
 
 /// Solves a preflop game using several threads. Gives exactly the same
-/// result as [PreflopSolver.solve] on one thread. [ranges]: see [PreflopSolver].
+/// result as [PreflopSolver.solve] on one thread. [ranges]: see
+/// [PreflopSolver]. With [warmFrom], starts from that solution of a similar
+/// game (see [warmStrategies]).
 Future<PreflopSolution> solvePreflopInParallel(
   PreflopSpec spec,
   PreflopEquity equity, {
   int iterations = 200,
   required int threads,
   Float64List? ranges,
+  PreflopSolution? warmFrom,
   void Function(int done, int total)? onProgress,
 }) async {
   final tree = PreflopTree(spec);
+  final warm = warmFrom == null ? null : warmStrategies(tree, warmFrom);
   // Small games are over before the threads would pay for themselves.
   if (threads < 2 || tree.decisions.length < 250) {
-    return PreflopSolver(tree, equity, ranges: ranges).solve(iterations: iterations, onProgress: onProgress);
+    return PreflopSolver(tree, equity, ranges: ranges, warm: warm)
+        .solve(iterations: iterations, onProgress: onProgress);
   }
   final plan = PreflopWorkPlan(tree, threads);
   // Only the coordinator starts from the root, so only it needs the ranges.
-  final coordinator =
-      PreflopSolver.part(tree, equity, owned: plan.trunk, frontier: plan.frontier, ranges: ranges);
+  final coordinator = PreflopSolver.part(tree, equity,
+      owned: plan.trunk,
+      frontier: plan.frontier,
+      ranges: ranges,
+      warm: warmFor(tree, warm, plan.trunk.toList()..sort()));
   // Start every worker at once (each builds its own copy of the tree).
   final workers = await Future.wait([
     for (final slots in plan.assignments)
-      _Worker.start(PreflopBranchJob(spec, equity.values, [for (final s in slots) plan.frontier[s]]), slots),
+      () {
+        final roots = [for (final s in slots) plan.frontier[s]];
+        final job = PreflopBranchJob(spec, equity.values, roots,
+            warm: warmFor(tree, warm, preflopBranchDecisions(tree, roots)));
+        return _Worker.start(job, slots);
+      }(),
   ]);
   final n = spec.players;
 

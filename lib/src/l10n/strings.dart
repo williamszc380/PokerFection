@@ -130,7 +130,6 @@ abstract class S {
   /// the web version at it (on the same Wi-Fi, from elsewhere), when the
   /// host serves it.
   String get copyInviteLink;
-  String get copyBrowserLink;
   String get noInvite;
   String get inviteThisComputer;
 
@@ -446,7 +445,17 @@ abstract class S {
   /// looked at someone's cards (a null name is the user).
   String helpNotice(String? name);
   String peekNotice(String? name, String? target);
-  String note(HandNote note) => note.peek ? peekNotice(note.name, note.target) : helpNotice(note.name);
+  String note(HandNote note) => switch (note) {
+        HandNote(shown: final cards?) =>
+          showNotice(note.name, [for (final c in cards) '${c.rankLabel}${c.suitSymbol}'].join(' ')),
+        HandNote(peek: true) => peekNotice(note.name, note.target),
+        _ => helpNotice(note.name),
+      };
+
+  /// After a hand: the button to show the user's cards to everyone, and
+  /// the notice ([name] null: the user).
+  String get showMyCards;
+  String showNotice(String? name, String cards);
   String get rulesChanged;
 
   /// Out of chips: the room's rule, the seat's badge, and what the user

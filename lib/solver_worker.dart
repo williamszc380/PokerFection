@@ -80,6 +80,7 @@ Future<void> _solvePreflop(SolverRequest request) async {
     iterations: request.iterations,
     threads: _threads(request),
     ranges: ranges.isEmpty ? null : ranges.single.toSolver,
+    warmFrom: request.warmFrom,
     onProgress: (done, total) {
       if (done % 5 == 0 || done == total) _reply(SolverReply(kind: 'progress', progress: done / total));
     },

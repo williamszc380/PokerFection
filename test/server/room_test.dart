@@ -333,6 +333,44 @@ void main() {
     }
   });
 
+  test('after the hand a player may show their cards to everyone, once; not during it', () async {
+    final clock = ManualClock();
+    final registry = RoomRegistry(clock: clock, random: Random(5));
+    final (server, link) = MemoryLink.pair();
+    registry.accept(server);
+    final received = <ServerMessage>[];
+    link.messages.listen((text) => received.add(ServerMessage.decode(text)));
+    void send(ClientMessage m) => link.send(m.encode());
+
+    send(const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 2), bots: {1: 'gto'}));
+    await pumpEventQueue();
+    send(const StartGame());
+    await pumpEventQueue();
+    send(Ready((received.whereType<NextHand>().single).hand));
+    await pumpEventQueue();
+    clock.advance(const Duration(seconds: 1));
+    await pumpEventQueue();
+    final dealt = received.whereType<HandDealt>().single;
+    final mine = dealt.batch.whereType<HoleCardsDealt>().single.cards.values.single;
+    // Not while the hand goes on.
+    send(ShowCards(hand: dealt.hand));
+    await pumpEventQueue();
+    expect(received.whereType<Rejected>().last.reason, Rejection.stale);
+    // Whoever acts first folds: the hand is over.
+    final turn = dealt.turn!;
+    send(turn.seat == 0
+        ? Act(hand: dealt.hand, turnId: turn.turnId, action: const PlayerAction.fold())
+        : BotAct(hand: dealt.hand, turnId: turn.turnId, seat: 1, action: const PlayerAction.fold()));
+    await pumpEventQueue();
+    send(ShowCards(hand: dealt.hand));
+    send(ShowCards(hand: dealt.hand));
+    await pumpEventQueue();
+    final shown = received.whereType<CardsShown>().toList();
+    expect(shown, hasLength(1), reason: 'shown once');
+    expect(shown.single.seat, 0, reason: "the host's room seat");
+    expect(shown.single.cards, mine);
+  });
+
   test('the time limit starts once the actions are shown, plus 1 s unshown; help changes from the next hand', () async {
     final clock = ManualClock();
     final registry = RoomRegistry(clock: clock, random: Random(4));

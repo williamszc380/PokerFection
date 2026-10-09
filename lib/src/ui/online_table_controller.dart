@@ -222,6 +222,9 @@ class OnlineTableController extends TableController {
   /// Cards the user looked at in this hand, by seat (shown face up).
   final Map<int, List<PlayingCard>> _peeked = {};
 
+  /// The user showed their cards after the hand on screen.
+  bool _shownMine = false;
+
   /// The decision (hand and turn) everyone was last told the user pressed
   /// Show GTO at.
   (int, int)? _helpSent;
@@ -439,6 +442,8 @@ class OnlineTableController extends TableController {
         await _onSnapshot(m, at);
       case PeekCards():
         _onPeek(m);
+      case CardsShown():
+        _onShown(m);
       case Notice():
         _onNotice(m);
       case Rejected():
@@ -597,6 +602,7 @@ class OnlineTableController extends TableController {
     _help = _nextHelp;
     _showCards = _nextShowCards;
     _peeked.clear();
+    _shownMine = false;
     _myTurn = null;
     _answer = null;
     _sentMove = null;
@@ -783,6 +789,7 @@ class OnlineTableController extends TableController {
     _help = _nextHelp = h.lineup.help;
     _showCards = _nextShowCards = h.lineup.showCards;
     _peeked.clear();
+    _shownMine = false;
     _myTurn = null;
     outOfSync = false;
     if (notice == OnlineNotice.outOfSync) notice = null;
@@ -1455,6 +1462,41 @@ class OnlineTableController extends TableController {
       ..cards = m.cards
       ..cardsHeld = 2
       ..faceUp = true;
+    _notify();
+  }
+
+  /// Whether the user may show their cards to everyone now: the hand they
+  /// played is over (until the next is dealt), and they haven't yet.
+  bool get canShowCards =>
+      handOver &&
+      !ended &&
+      _handNumber > 0 &&
+      !_shownMine &&
+      view.seats[TableSession.heroSeat].cards.length == 2;
+
+  /// Shows the user's cards to everyone at the table (after the hand).
+  void showCards() {
+    if (!canShowCards) return;
+    _shownMine = true;
+    client.send(ShowCards(hand: _handNumber));
+    _notify();
+  }
+
+  /// A player showed their cards after the hand: face up at their seat
+  /// until the next is dealt, and everyone is told.
+  void _onShown(CardsShown m) {
+    if (m.hand != _handNumber) return;
+    // The seats of the hand on screen (the next one's may be announced).
+    final seat = _viewRoomSeats.indexOf(m.seat);
+    if (seat < 0) return;
+    if (seat != TableSession.heroSeat) {
+      view.seats[seat]
+        ..cards = m.cards
+        ..cardsHeld = 2
+        ..faceUp = true;
+    }
+    final note = HandNote(name: seat == TableSession.heroSeat ? null : view.seats[seat].info.name, shown: m.cards);
+    _toast(OnlineToast.note(note));
     _notify();
   }
 

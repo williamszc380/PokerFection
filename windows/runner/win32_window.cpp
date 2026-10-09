@@ -26,6 +26,13 @@ constexpr const wchar_t kGetPreferredBrightnessRegKey[] =
   L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 constexpr const wchar_t kGetPreferredBrightnessRegValue[] = L"AppsUseLightTheme";
 
+// The smallest client area the window can be resized to, in logical pixels:
+// enough for the table to keep the decisions in a card in its bottom-right
+// corner (at least 900 x 600 under the 56-pixel app bar; see
+// lib/src/ui/table_screen.dart). Never more than the screen has room for.
+constexpr int kMinClientWidth = 900;
+constexpr int kMinClientHeight = 656;
+
 // The number of Win32Window objects that currently exist.
 static int g_active_window_count = 0;
 
@@ -197,6 +204,29 @@ Win32Window::MessageHandler(HWND hwnd,
 
       return 0;
     }
+    case WM_GETMINMAXINFO: {
+      // The smallest the window can be resized to (see kMinClientWidth).
+      UINT dpi = GetDpiForWindow(hwnd);
+      double scale_factor = dpi / 96.0;
+      RECT frame = {0, 0, Scale(kMinClientWidth, scale_factor),
+                    Scale(kMinClientHeight, scale_factor)};
+      AdjustWindowRectExForDpi(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
+      LONG width = frame.right - frame.left;
+      LONG height = frame.bottom - frame.top;
+      MONITORINFO monitor = {sizeof(MONITORINFO)};
+      if (GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+                         &monitor)) {
+        LONG screen_width = monitor.rcWork.right - monitor.rcWork.left;
+        LONG screen_height = monitor.rcWork.bottom - monitor.rcWork.top;
+        if (width > screen_width) width = screen_width;
+        if (height > screen_height) height = screen_height;
+      }
+      auto info = reinterpret_cast<MINMAXINFO*>(lparam);
+      info->ptMinTrackSize.x = width;
+      info->ptMinTrackSize.y = height;
+      return 0;
+    }
+
     case WM_SIZE: {
       RECT rect = GetClientArea();
       if (child_content_ != nullptr) {

@@ -13,6 +13,7 @@ import 'package:web/web.dart' as web;
 import 'branch_jobs.dart';
 import 'message_queue.dart';
 import 'postflop/postflop_tree.dart';
+import 'preflop/preflop_solver.dart';
 import 'preflop/preflop_tree.dart';
 
 /// Whether this code was compiled to WebAssembly (else to JavaScript).
@@ -59,12 +60,14 @@ List<JSObject> transferOf(List<JSTypedArray> arrays) => [for (final a in arrays)
 
 /// A message to a solver worker. [kind] says which fields it has:
 /// - `preflop`: solve a whole game ([spec], [iterations], [threads],
-///   [equity], and the players' starting [ranges] if any), replying with
-///   `progress` and then `solved`;
+///   [equity], the players' starting [ranges] if any, and for a warm start
+///   the game it starts from, [warmSpec], and that game's strategies,
+///   [warm]), replying with `progress` and then `solved`;
 /// - `postflop`: solve a street ([spec], [iterations], [threads], both
 ///   players' [ranges]), replying `solved`;
 /// - `preflopBranches`, `postflopBranches`: become a worker thread of such
-///   a solve (a [BranchJob]: [spec], [equity] or [ranges], [roots]), then
+///   a solve (a [BranchJob]: [spec], [equity] or [ranges], [roots], and
+///   [warm] for a warm start), then
 ///   answer `walk` ([t], [last], [active], [reach], [mass]) with `walked`
 ///   and `export` with `exported`.
 extension type SolverRequest._(JSObject _) implements JSObject {
@@ -81,6 +84,8 @@ extension type SolverRequest._(JSObject _) implements JSObject {
     JSUint8Array active,
     JSFloat64Array reach,
     JSFloat64Array mass,
+    String warmSpec,
+    JSFloat32Array warm,
   });
 
   factory SolverRequest.preflop(
@@ -89,6 +94,7 @@ extension type SolverRequest._(JSObject _) implements JSObject {
     required int iterations,
     required int threads,
     Float64List? ranges,
+    PreflopSolution? warmFrom,
   }) =>
       SolverRequest(
         kind: 'preflop',
@@ -97,6 +103,8 @@ extension type SolverRequest._(JSObject _) implements JSObject {
         threads: threads,
         equity: equity.toJS,
         ranges: [if (ranges != null) ranges.toJS].toJS,
+        warmSpec: warmFrom == null ? '' : jsonEncode(warmFrom.tree.spec.toJson()),
+        warm: (warmFrom?.strategy ?? Float32List(0)).toJS,
       );
 
   factory SolverRequest.postflop(
@@ -119,6 +127,7 @@ extension type SolverRequest._(JSObject _) implements JSObject {
             spec: jsonEncode(job.spec.toJson()),
             equity: job.equity.toJS,
             roots: Int32List.fromList(job.roots).toJS,
+            warm: (job.warm ?? Float32List(0)).toJS,
           ),
         PostflopBranchJob() => SolverRequest(
             kind: 'postflopBranches',
@@ -140,12 +149,28 @@ extension type SolverRequest._(JSObject _) implements JSObject {
   external JSUint8Array get active;
   external JSFloat64Array get reach;
   external JSFloat64Array get mass;
+  external String? get warmSpec;
+  external JSFloat32Array? get warm;
+
+  /// The warm start's strategies ([warm]), if any.
+  Float32List? get warmStrategies {
+    final w = warm?.toDart;
+    return w == null || w.isEmpty ? null : w;
+  }
+
+  /// The solution a `preflop` solve starts from, if any (only its strategies
+  /// are sent).
+  PreflopSolution? get warmFrom {
+    final s = warmSpec, w = warmStrategies;
+    if (s == null || s.isEmpty || w == null) return null;
+    return PreflopSolution(PreflopTree(PreflopSpec.fromJson(jsonDecode(s) as Map<String, Object?>)), w, Float32List(0));
+  }
 
   PreflopSpec get preflopSpec => PreflopSpec.fromJson(jsonDecode(spec) as Map<String, Object?>);
   PostflopSpec get postflopSpec => PostflopSpec.fromJson(jsonDecode(spec) as Map<String, Object?>);
 
   BranchJob get branchJob => switch (kind) {
-        'preflopBranches' => PreflopBranchJob(preflopSpec, equity.toSolver, roots.toDart),
+        'preflopBranches' => PreflopBranchJob(preflopSpec, equity.toSolver, roots.toDart, warm: warmStrategies),
         _ => PostflopBranchJob(postflopSpec, [for (final r in ranges.toDart) r.toSolver], roots.toDart),
       };
 }

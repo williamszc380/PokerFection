@@ -237,27 +237,29 @@ A host on Windows also serves the browser version of the game, so friends
 can play in Chrome, Edge, Firefox or Safari without installing anything
 (on a computer, a tablet or a phone).
 
-1. Press **Invite**, then **Copy browser link**, and send it. It is an
-   address like `http://192.168.1.20:47474/?code=K7M2Q` (your PC on the
-   Wi-Fi), or, once the lobby says **Internet: ready** (or **set by
-   hand**), one with your public address, like
-   `http://203.0.113.7:47474/?code=K7M2Q`, which works from anywhere.
-2. Your friend opens the address. The **Play Online** screen opens with the
+1. Press **Invite**, then **Copy invite link**, and send it: the same link
+   as for friends with the app. It opens a small page on the PokerFection
+   website with the room code and a button for each way in: **Open in the
+   PokerFection app**, **Play in this browser (on the same Wi-Fi as the
+   host)**, and, once the lobby says **Internet: ready** (or **set by
+   hand**), **Play in this browser (from anywhere else)**.
+2. Your friend presses the button for where they are. A browser button
+   opens your PC's own copy of the game, like
+   `http://192.168.1.20:47474/?code=K7M2Q`, at **Play Online** with the
    room code filled in.
 3. They type their name and press **Join Room**.
 
 Good to know:
 
-- **Copy browser link** only appears when your app includes the browser
+- The browser buttons only work when your app includes the browser
   version. Windows builds include it once it has been built (see the
   README: `dart run tool/build_web.dart --host`); the phone apps don't
   serve it.
 - Some routers don't let a device at home reach the home's own public
-  address. If a friend on your Wi-Fi can't open the public browser link,
-  give them the Wi-Fi one instead: `http://<your PC's local address>:47474/?code=K7M2Q`
-  (the lobby's **?** next to Internet shows the local address).
-- Use the address from the invite, not the PokerFection website: browsers
-  don't let a secure (https) website reach a game on someone's PC.
+  address: on your Wi-Fi, use the **same Wi-Fi** button.
+- The website itself can't play at your table: browsers don't let a secure
+  (https) website reach a game on someone's PC. That's why its join page
+  sends your friends to the app or to your PC's own copy of the game.
 - On that page the **Paste** button may not be allowed to read the
   clipboard: paste with **Ctrl+V** (or a long press on a phone) in the box
   instead.
@@ -297,8 +299,8 @@ router).
    ready**; its **?** repeats these steps with your port and local
    address). If the rule's external port isn't the room's port, add it:
    `203.0.113.7:47500`. The lobby then says **Internet: set by hand**, and
-   the invite (after your local addresses) and **Copy browser link** carry
-   your public address. The app remembers it for your next rooms; empty the
+   the invite (after your local addresses, and as the join page's **from
+   anywhere else** button) carries your public address. The app remembers it for your next rooms; empty the
    box to stop using it.
 7. Check it from outside: the app can't. A friend opens
    `http://203.0.113.7:47474/health` in a browser. It should show

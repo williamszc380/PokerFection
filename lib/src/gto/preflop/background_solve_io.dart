@@ -17,13 +17,15 @@ int get _threads => min(max(Platform.numberOfProcessors - 1, 1), 12);
 
 /// Solves [spec] away from the UI thread, spread over the CPU's cores
 /// (one coordinator isolate plus worker isolates), reporting progress 0-1.
-/// [ranges]: see [PreflopSolver].
+/// [ranges]: see [PreflopSolver]. With [warmFrom], starts from that
+/// solution of a similar game (see [warmStrategies]).
 Future<PreflopSolution> solveInBackground(
   PreflopSpec spec,
   PreflopEquity equity,
   int iterations,
   void Function(double progress) onProgress, {
   Float64List? ranges,
+  PreflopSolution? warmFrom,
 }) async {
   final port = ReceivePort();
   final result = Completer<PreflopSolution>();
@@ -39,7 +41,15 @@ Future<PreflopSolution> solveInBackground(
       port.close();
     }
   });
-  final _Request request = (port.sendPort, spec, equity.values, iterations, _threads, ranges);
+  final _Request request = (
+    port.sendPort,
+    spec,
+    equity.values,
+    iterations,
+    _threads,
+    ranges,
+    warmFrom == null ? null : (warmFrom.tree.spec, warmFrom.strategy),
+  );
   await Isolate.spawn(_coordinatorMain, request, onError: port.sendPort);
   return result.future;
 }
@@ -60,16 +70,18 @@ Future<PostflopSolution> solvePostflopInBackground(
   return PostflopSolution(PostflopTree(spec, hands: hands.length), hands, strategy, values);
 }
 
-typedef _Request = (SendPort, PreflopSpec, Float64List, int, int, Float64List?);
+/// The warm start's game and strategies (its tree is rebuilt on the other side).
+typedef _Request = (SendPort, PreflopSpec, Float64List, int, int, Float64List?, (PreflopSpec, Float32List)?);
 
 Future<void> _coordinatorMain(_Request request) async {
-  final (reply, spec, equityValues, iterations, threads, ranges) = request;
+  final (reply, spec, equityValues, iterations, threads, ranges, warm) = request;
   final solution = await solvePreflopInParallel(
     spec,
     PreflopEquity(equityValues),
     iterations: iterations,
     threads: threads,
     ranges: ranges,
+    warmFrom: warm == null ? null : PreflopSolution(PreflopTree(warm.$1), warm.$2, Float32List(0)),
     onProgress: (done, total) {
       if (done % 5 == 0 || done == total) reply.send(done / total);
     },

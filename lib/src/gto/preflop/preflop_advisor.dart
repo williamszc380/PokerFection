@@ -111,8 +111,12 @@ class PreflopAdvisor {
       frequency: (i) => solution.frequency(node, i, handClass),
       value: (i) {
         final value = solution.value(node, i, handClass);
-        // Relative to folding now: add back what this player has already put in.
-        return value.isNaN ? double.nan : (value + invested) / hand.bigBlind;
+        if (value.isNaN) return double.nan;
+        // Folding now is the zero point (exactly, whatever the rounding of
+        // the solver's 32-bit numbers); otherwise add back what this player
+        // has already put in.
+        if (node.actions[i].move == PreflopMove.fold) return 0;
+        return (value + invested) / hand.bigBlind;
       },
     );
   }

@@ -49,7 +49,11 @@ import 'widgets/turn_clock.dart';
 /// random hands); a saved spot's result says when it is back, and Show GTO
 /// waits until the spot is played.
 class DecisionPanel extends StatefulWidget {
-  const DecisionPanel({super.key, required this.controller, this.onLobby});
+  const DecisionPanel({super.key, required this.controller, this.onLobby, this.compact = false});
+
+  /// In a card in the corner of a big screen: Fold, Check or Call and Raise
+  /// in one row, so the card takes less of the table.
+  final bool compact;
 
   final TableController controller;
 
@@ -197,9 +201,8 @@ class DecisionPanelState extends State<DecisionPanel> {
     _gtoSizes = null;
     _ownTop = null;
     _ownSizes = null;
-    // The slider starts at the smallest raise of the menu.
-    final firstRaise = _rows.sizes.where((i) => menu[i].kind == SpotActionKind.raise).firstOrNull;
-    _raiseTo = firstRaise != null ? menu[firstRaise].amount : (_rows.sizes.isEmpty ? 0 : menu[_rows.sizes.last].amount);
+    // The slider starts at the smallest raise allowed (the min-raise).
+    _raiseTo = _rows.aggressive.isEmpty ? 0 : (_c.heroOptions?.minRaiseTo ?? 0);
     _startDraw = _draw;
     _startRaiseTo = _raiseTo;
   }
@@ -274,10 +277,10 @@ class DecisionPanelState extends State<DecisionPanel> {
     _gtoShown = true;
   });
 
-  /// Show GTO is a toggle. In simple training it switches between the
-  /// buttons and the list with GTO's answer; in advanced training it fills
-  /// in GTO's mix, and turning it off puts the user's own back. Online,
-  /// everyone at the table is told when it is turned on.
+  /// Show GTO is a toggle. In simple training it puts GTO's percentages on
+  /// the buttons (and its raise sizes over the slider); in advanced training
+  /// it fills in GTO's mix, and turning it off puts the user's own back.
+  /// Online, everyone at the table is told when it is turned on.
   void _toggleGto() {
     if (!_percentages) {
       setState(() => _gtoShown = !_gtoShown);
@@ -324,15 +327,32 @@ class DecisionPanelState extends State<DecisionPanel> {
     return best;
   }
 
-  /// Where [to] sits on the raise slider: ratios are spread evenly, so small
-  /// raises get as much room as big ones.
-  static double _sliderPosition(int to, int minTo, int maxTo) =>
-      maxTo <= minTo ? 1 : (log(to / minTo) / log(maxTo / minTo)).clamp(0.0, 1.0);
+  /// The amounts along the raise slider, evenly spaced: the min-raise
+  /// ([minTo]), each raise size ([sizes], Fibonacci amounts of BB) and
+  /// all-in ([maxTo]) at the right end.
+  static List<int> _stops(List<int> sizes, int minTo, int maxTo) =>
+      [minTo, for (final size in sizes) if (size > minTo && size < maxTo) size, if (maxTo > minTo) maxTo];
 
-  /// The raise at [position] on the slider, to 0.5 BB (all-in at the end).
-  static int _amountAt(double position, int minTo, int maxTo) {
-    if (position >= 1 || maxTo <= minTo) return maxTo;
-    final to = roundToHalfBb(minTo * pow(maxTo / minTo, position), TableConfig.bigBlind);
+  /// Where [to] sits on the raise slider: between two [_stops], in proportion.
+  static double _sliderPosition(int to, List<int> sizes, int minTo, int maxTo) {
+    final stops = _stops(sizes, minTo, maxTo);
+    final steps = stops.length - 1;
+    if (steps < 1) return 1;
+    if (to <= stops.first) return 0;
+    for (var k = 0; k < steps; k++) {
+      if (to <= stops[k + 1]) return (k + (to - stops[k]) / (stops[k + 1] - stops[k])) / steps;
+    }
+    return 1;
+  }
+
+  /// The raise at [position] on the slider, to 0.5 BB (all-in at the right end).
+  static int _amountAt(double position, List<int> sizes, int minTo, int maxTo) {
+    final stops = _stops(sizes, minTo, maxTo);
+    final steps = stops.length - 1;
+    if (steps < 1 || position >= 1) return maxTo;
+    final x = (position * steps).clamp(0.0, steps.toDouble());
+    final k = min(x.floor(), steps - 1);
+    final to = roundToHalfBb(stops[k] + (x - k) * (stops[k + 1] - stops[k]), TableConfig.bigBlind);
     return to.clamp(minTo, maxTo);
   }
 
@@ -472,8 +492,10 @@ class DecisionPanelState extends State<DecisionPanel> {
         hand.street != Street.preflop &&
         (_c.session.postflop?.approximate ?? false);
     // Only what the table doesn't already show: the pot odds when facing a
-    // bet (not online without help: there it is player against player).
-    final potOdds = options == null || !options.canCall || (_online != null && !_c.guessGto)
+    // bet, as help, only while Show GTO is on (its line stays, so nothing
+    // moves when it is turned on). Not without the Show GTO button (Free
+    // Play, online without help).
+    final potOdds = options == null || !options.canCall || !(_training || _awaitingHelp)
         ? null
         : s.potOdds((options.toCall / (options.pot + options.toCall) * 100).round());
     final notices = [
@@ -486,7 +508,14 @@ class DecisionPanelState extends State<DecisionPanel> {
         Text(s.approxMultiway, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFFFFCC80))),
       // Online: GTO's answer is on its way (play on: the move is graded when it comes).
       if (awaiting) _solvingLine(context),
-      if (potOdds != null) Text(potOdds, style: muted, maxLines: 1, overflow: TextOverflow.ellipsis),
+      if (potOdds != null)
+        Visibility(
+          visible: _gtoShown,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          child: Text(potOdds, key: const ValueKey('pot odds'), style: muted, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
       // Online, with a time limit: the time left.
       if (_c.view.turnEnds case final ends?)
         TurnClock.bar(
@@ -496,8 +525,8 @@ class DecisionPanelState extends State<DecisionPanel> {
           style: muted?.copyWith(color: const Color(0xFFFFE082)),
         ),
     ];
-    // Free Play, and simple training until Show GTO: the buttons.
-    if (!_percentages && !(training && _gtoShown)) return _quick(context, notices);
+    // Free Play and simple training: the buttons (GTO's answer goes on them).
+    if (!_percentages) return _quick(context, notices);
     final played = _played;
     final mix = _mix();
 
@@ -513,11 +542,6 @@ class DecisionPanelState extends State<DecisionPanel> {
             upper: _rows.allowed.indexOf(_rows.passive) + 1,
             onChanged: _setShares,
           ),
-        // Simple training, after Show GTO: GTO's mix.
-        if (training && !_percentages && _gtoShown) ...[
-          const SizedBox(height: 4),
-          MixBar(actions: menu, frequencies: _c.heroSpot!.frequencies),
-        ],
         const SizedBox(height: 4),
         Expanded(child: LayoutBuilder(builder: _choices)),
         const SizedBox(height: 6),
@@ -567,48 +591,89 @@ class DecisionPanelState extends State<DecisionPanel> {
     );
   }
 
-  /// Free Play, and simple training until Show GTO: big Fold and Check or
-  /// Call buttons, and Raise with a slider below it for any amount (to
-  /// 0.5 BB) up to all-in. Each button plays at once.
+  /// Free Play and simple training: big Fold and Check or Call buttons, and
+  /// Raise with a slider below it for any amount (to 0.5 BB) up to all-in.
+  /// Each button plays at once. With Show GTO on, each button shows how
+  /// often GTO takes it, and bars over the slider show the amounts GTO
+  /// raises to (each one's share of its raises).
   Widget _quick(BuildContext context, List<Widget> notices) {
     final s = S.of(context);
     final menu = _rows.menu;
+    final gto = _training && _gtoShown ? _c.heroSpot : null;
+    double? share(Iterable<int> actions) =>
+        gto == null ? null : actions.fold<double>(0, (sum, i) => sum + gto.frequencies[i]);
     final options = _c.heroOptions;
     final canRaise = options != null && options.canRaise && _rows.canRaise;
-    final minTo = options?.minRaiseTo ?? 0, maxTo = options?.maxRaiseTo ?? 0;
+    // The slider runs from the min-raise to all-in; the raise sizes GTO
+    // uses (Fibonacci amounts of BB) are marked on it as a guide.
+    final sizes = _raiseSizes;
+    final maxTo = options?.maxRaiseTo ?? 0;
+    final minTo = options?.minRaiseTo ?? 0;
     final to = canRaise ? _raiseTo.clamp(minTo, maxTo) : maxTo;
     final raise = _nearestRaise(to);
     final allIn = raise == _rows.aggressive.last;
     final passive = menu[_rows.passive];
-    final allInWord = s.allIn('').trim();
     return _buttons(
       notices: notices,
-      left: _bigButton(
+      left: _actionButton(
         key: const ValueKey('quick fold'),
+        name: s.fold,
         label: s.fold,
+        icon: Icons.close,
         color: actionColor(menu, _rows.fold),
         onPressed: _rows.canFold ? () => _quickPlay(_rows.fold) : null,
+        gto: _rows.canFold ? share([_rows.fold]) : null,
       ),
-      right: _bigButton(
-        key: const ValueKey('quick call'),
-        label: passive.kind == SpotActionKind.check ? s.check : s.callWord,
-        amount: passive.kind == SpotActionKind.call ? formatBb(passive.amount, unit: true) : null,
-        color: actionColor(menu, _rows.passive),
-        onPressed: () => _quickPlay(_rows.passive),
-      ),
-      wide: _bigButton(
+      right: passive.kind == SpotActionKind.check
+          ? _actionButton(
+              key: const ValueKey('quick call'),
+              name: s.check,
+              label: s.check,
+              icon: Icons.check,
+              color: actionColor(menu, _rows.passive),
+              onPressed: () => _quickPlay(_rows.passive),
+              gto: share([_rows.passive]),
+            )
+          : _actionButton(
+              key: const ValueKey('quick call'),
+              name: s.callWord,
+              label: s.callWord,
+              amount: formatBb(passive.amount, unit: true),
+              color: actionColor(menu, _rows.passive),
+              onPressed: () => _quickPlay(_rows.passive),
+              gto: share([_rows.passive]),
+            ),
+      wide: _actionButton(
         key: const ValueKey('quick raise'),
-        label: allIn ? allInWord : s.raiseAnySize,
+        name: allIn ? s.allIn(formatBb(to, unit: true)) : s.raiseTo(formatBb(to, unit: true), null),
+        label: allIn ? s.allIn('').trim() : s.raiseAnySize,
         amount: formatBb(to, unit: true),
         color: actionColor(menu, raise),
         onPressed: canRaise
             ? () => _quickPlay(raise, action: allIn || menu[raise].amount == to ? null : PlayerAction.raiseTo(to))
             : null,
+        gto: canRaise ? share(_rows.sizes) : null,
       ),
-      below: _raiseSlider(s, canRaise: canRaise, to: to, minTo: minTo, maxTo: maxTo, color: actionColor(menu, raise)),
+      below: _raiseArea(
+        s,
+        canRaise: canRaise,
+        to: to,
+        minTo: minTo,
+        maxTo: maxTo,
+        sizes: sizes,
+        color: actionColor(menu, raise),
+        gto: canRaise ? gto : null,
+        at: raise,
+      ),
       gto: _training || _awaitingHelp,
     );
   }
+
+  /// The raise sizes there are here (Fibonacci amounts of BB), smallest first.
+  List<int> get _raiseSizes => [
+        for (final i in _rows.aggressive)
+          if (_rows.menu[i].kind == SpotActionKind.raise) _rows.menu[i].amount,
+      ]..sort();
 
   /// The quick view's layout, the same at the user's turn and while
   /// someone else acts (the pre-actions take the buttons' places): [left]
@@ -635,15 +700,27 @@ class DecisionPanelState extends State<DecisionPanel> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(child: left),
-                      const SizedBox(width: 8),
-                      Expanded(child: right),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  wide,
+                  if (widget.compact)
+                    Row(
+                      children: [
+                        Expanded(flex: 2, child: left),
+                        const SizedBox(width: 8),
+                        Expanded(flex: 2, child: right),
+                        const SizedBox(width: 8),
+                        Expanded(flex: 3, child: wide),
+                      ],
+                    )
+                  else ...[
+                    Row(
+                      children: [
+                        Expanded(child: left),
+                        const SizedBox(width: 8),
+                        Expanded(child: right),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    wide,
+                  ],
                   below,
                   if (gto) ...[
                     const SizedBox(height: 10),
@@ -658,9 +735,9 @@ class DecisionPanelState extends State<DecisionPanel> {
     );
   }
 
-  /// One of the quick view's big buttons. With [ticked] it is a toggle (a
-  /// pre-action): a tick box before its name, and its full color only
-  /// while ticked.
+  /// One of the quick view's big buttons as a pre-action toggle (or with
+  /// [ticked] null, a plain button): a tick box before its name, and its
+  /// full color only while ticked.
   static Widget _bigButton({
     required Key key,
     required String label,
@@ -685,16 +762,7 @@ class DecisionPanelState extends State<DecisionPanel> {
     return FilledButton(
       key: key,
       onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        backgroundColor: dim ? color.withValues(alpha: 0.18) : color,
-        foregroundColor: dim ? Colors.white70 : Colors.white,
-        disabledBackgroundColor: Colors.white10,
-        disabledForegroundColor: Colors.white38,
-        minimumSize: const Size.fromHeight(60),
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        side: ticked == null ? null : BorderSide(color: color, width: 2),
-      ),
+      style: _buttonStyle(color, dim: dim, side: ticked == null ? null : BorderSide(color: color, width: 2)),
       child: switch (ticked) {
         null => text,
         final on => Row(
@@ -709,57 +777,386 @@ class DecisionPanelState extends State<DecisionPanel> {
     );
   }
 
-  /// The raise slider (any amount, to 0.5 BB, up to all-in), with − and +
-  /// for one step, and its two ends under it (or why raising isn't allowed).
-  Widget _raiseSlider(
+  /// One of the quick view's buttons at the user's turn, in the action's
+  /// color: a small [label] on top (Fold, Check, Call, Raise, All-in), which
+  /// Show GTO replaces with how often GTO takes it ([gto]), in the same
+  /// place; under it the amount (big), or for fold and check just a sign
+  /// ([icon]). [name] is what screen readers say.
+  static Widget _actionButton({
+    required Key key,
+    required String name,
+    required String label,
+    IconData? icon,
+    String? amount,
+    required Color color,
+    VoidCallback? onPressed,
+    double? gto,
+  }) => FilledButton(
+    key: key,
+    onPressed: onPressed,
+    style: _buttonStyle(color),
+    child: Semantics(
+      label: name,
+      excludeSemantics: true,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // The same place and size either way: nothing moves with Show GTO.
+            Container(
+              key: gto == null ? null : ValueKey('$key gto'),
+              margin: const EdgeInsets.only(bottom: 1),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: gto == null ? null : Colors.black38,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                gto == null ? label : gtoPercent(gto),
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: gto == null ? Colors.white70 : Colors.white,
+                ),
+              ),
+            ),
+            if (icon != null) Icon(icon, size: 28),
+            if (amount != null)
+              Text(amount, maxLines: 1, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  /// The quick view's big buttons' look: 60 high, in [color] ([dim]: faded,
+  /// for a pre-action not ticked).
+  static ButtonStyle _buttonStyle(Color color, {bool dim = false, BorderSide? side}) => FilledButton.styleFrom(
+    backgroundColor: dim ? color.withValues(alpha: 0.18) : color,
+    foregroundColor: dim ? Colors.white70 : Colors.white,
+    disabledBackgroundColor: Colors.white10,
+    disabledForegroundColor: Colors.white38,
+    minimumSize: const Size.fromHeight(60),
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    side: side,
+  );
+
+  /// Room beside the raise slider for − and +, and the slider track's inset
+  /// from its own edges: the bars over it and the amounts under it line up
+  /// with it by these.
+  static const _sideWidth = 44.0, _trackInset = 16.0;
+
+  /// Room over the slider for GTO's bars (kept when they don't show, so
+  /// nothing moves when Show GTO is pressed), and under it for the amounts.
+  static const _barsHigh = 22.0, _barsLabel = 13.0, _legendHigh = 24.0;
+
+  /// The raise slider's area: GTO's bars over it (Show GTO: [gto]), the
+  /// slider with − and +, and under it each raise size there is, where it
+  /// sits on the slider (the scale isn't linear: small amounts get more
+  /// room), up to all-in. Always the same height.
+  Widget _raiseArea(
     S s, {
     required bool canRaise,
     required int to,
     required int minTo,
     required int maxTo,
+    required List<int> sizes,
     required Color color,
+    SpotStrategy? gto,
+    int? at,
   }) {
-    final muted = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _alongSlider(
+          height: _barsHigh + _barsLabel,
+          child: gto == null || at == null
+              ? null
+              : (width) => _raiseBars(gto, minTo: minTo, maxTo: maxTo, at: at, width: width),
+        ),
         Row(
           children: [
-            IconButton(
-              key: const ValueKey('raise less'),
-              icon: const Icon(Icons.remove),
-              onPressed:
-                  canRaise && to > minTo ? () => setState(() => _raiseTo = _stepRaise(to, -1, minTo, maxTo)) : null,
-            ),
-            Expanded(
-              child: Slider(
-                key: const ValueKey('raise slider'),
-                value: canRaise ? _sliderPosition(to, minTo, maxTo) : 1,
-                activeColor: color,
-                onChanged: canRaise ? (p) => setState(() => _raiseTo = _amountAt(p, minTo, maxTo)) : null,
+            SizedBox(
+              width: _sideWidth,
+              child: IconButton(
+                key: const ValueKey('raise less'),
+                icon: const Icon(Icons.remove),
+                onPressed:
+                    canRaise && to > minTo ? () => setState(() => _raiseTo = _stepRaise(to, -1, minTo, maxTo)) : null,
               ),
             ),
-            IconButton(
-              key: const ValueKey('raise more'),
-              icon: const Icon(Icons.add),
-              onPressed:
-                  canRaise && to < maxTo ? () => setState(() => _raiseTo = _stepRaise(to, 1, minTo, maxTo)) : null,
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  // The whole strip takes presses and drags, its ends beside
+                  // the track (where the thumb sits at either end) included:
+                  // the slider goes where the finger is.
+                  void slideTo(Offset at) {
+                    final track = box.maxWidth - 2 * _trackInset;
+                    final p = track <= 0 ? 0.0 : ((at.dx - _trackInset) / track).clamp(0.0, 1.0);
+                    setState(() => _raiseTo = _amountAt(p, sizes, minTo, maxTo));
+                  }
+
+                  return MouseRegion(
+                    // The hand the slider shows (it can't: it ignores the pointer).
+                    cursor: canRaise ? SystemMouseCursors.click : MouseCursor.defer,
+                    child: GestureDetector(
+                      key: const ValueKey('raise slider area'),
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragDown: canRaise ? (d) => slideTo(d.localPosition) : null,
+                      onHorizontalDragUpdate: canRaise ? (d) => slideTo(d.localPosition) : null,
+                      // The slider itself only shows it (and serves screen readers).
+                      child: IgnorePointer(
+                        child: SliderTheme(
+                          // A fixed inset, so the bars and amounts line up with it.
+                          data: SliderTheme.of(context)
+                              .copyWith(padding: const EdgeInsets.symmetric(horizontal: _trackInset)),
+                          child: Slider(
+                            key: const ValueKey('raise slider'),
+                            value: canRaise ? _sliderPosition(to, sizes, minTo, maxTo) : 1,
+                            activeColor: color,
+                            onChanged:
+                                canRaise ? (p) => setState(() => _raiseTo = _amountAt(p, sizes, minTo, maxTo)) : null,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SizedBox(
+              width: _sideWidth,
+              child: IconButton(
+                key: const ValueKey('raise more'),
+                icon: const Icon(Icons.add),
+                onPressed:
+                    canRaise && to < maxTo ? () => setState(() => _raiseTo = _stepRaise(to, 1, minTo, maxTo)) : null,
+              ),
             ),
           ],
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 48),
-          child: canRaise
-              ? Row(children: [
-                  Text(formatBb(minTo, unit: true), style: muted),
-                  const Spacer(),
-                  Text(s.allIn('').trim(), style: muted),
-                ])
-              : Text(s.unavailable(Unavailable.raisingNotAllowed), style: muted, textAlign: TextAlign.center),
-        ),
+        canRaise
+            ? _alongSlider(
+                height: _legendHigh,
+                child: (width) => _sizeLegend(s, sizes: sizes, minTo: minTo, maxTo: maxTo, to: to, width: width),
+              )
+            : SizedBox(
+                height: _legendHigh,
+                child: Center(
+                  child: Text(
+                    s.unavailable(Unavailable.raisingNotAllowed),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60),
+                  ),
+                ),
+              ),
       ],
     );
+  }
+
+  /// A strip [height] high lined up with the raise slider's track: [child]
+  /// gets the track's width (positions 0 to 1 map onto it).
+  Widget _alongSlider({required double height, Widget Function(double width)? child}) => Row(
+    children: [
+      const SizedBox(width: _sideWidth),
+      Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: _trackInset),
+          child: SizedBox(
+            height: height,
+            child: child == null ? null : LayoutBuilder(builder: (context, box) => child(box.maxWidth)),
+          ),
+        ),
+      ),
+      const SizedBox(width: _sideWidth),
+    ],
+  );
+
+  /// Show GTO in simple training: a bar for each amount GTO raises to
+  /// (all-in at the right end), where it sits on the slider, as high as how
+  /// often GTO raises to it, with its share of GTO's raises (the one the
+  /// slider is on, [at], stands out). A tap moves the slider there.
+  Widget _raiseBars(SpotStrategy spot, {required int minTo, required int maxTo, required int at, required double width}) {
+    final menu = _rows.menu;
+    final bars = [
+      for (final i in _rows.sizes)
+        if (spot.frequencies[i] > 0)
+          (
+            i: i,
+            x: menu[i].kind == SpotActionKind.allIn ? 1.0 : _sliderPosition(menu[i].amount, _raiseSizes, minTo, maxTo),
+            share: spot.frequencies[i],
+          ),
+    ];
+    if (bars.isEmpty) return const SizedBox.shrink();
+    final most = bars.map((b) => b.share).reduce(max);
+    // Each size's share of GTO's raises (how often GTO raises at all is on
+    // the Raise button).
+    final raises = bars.fold(0.0, (sum, b) => sum + b.share);
+    return Stack(
+      key: const ValueKey('gto raise bars'),
+      clipBehavior: Clip.none,
+      children: [
+        for (final b in bars)
+          Positioned(
+            left: b.x * width - 20,
+            width: 40,
+            bottom: 0,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _raiseTo = menu[b.i].amount),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${(b.share / raises * 100).round()}%',
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: b.i == at ? Colors.white : Colors.white60,
+                      fontWeight: b.i == at ? FontWeight.w700 : null,
+                    ),
+                  ),
+                  Container(
+                    width: 12,
+                    height: max(2.0, _barsHigh * b.share / most),
+                    decoration: BoxDecoration(
+                      color: actionColor(menu, b.i).withValues(alpha: b.i == at ? 1 : 0.6),
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
+                      border: b.i == at ? Border.all(color: Colors.white, width: 1.5) : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Under the raise slider: a tick and the amount (in BB) for each raise
+  /// size there is, centered where it sits on the slider (the ends' labels
+  /// reach into the room beside it), and at the right end all-in's tick
+  /// with "All-in" faintly behind (no amount: the button shows it). The one
+  /// the slider is on ([to]) stands out; a tap moves the slider there.
+  /// Every amount always shows: when they would run into each other, they
+  /// all get smaller.
+  Widget _sizeLegend(
+    S s, {
+    required List<int> sizes,
+    required int minTo,
+    required int maxTo,
+    required int to,
+    required double width,
+  }) {
+    final marks = [
+      if (sizes.isEmpty || sizes.first > minTo) (amount: minTo, x: 0.0, text: _bbNumber(minTo)),
+      for (final size in sizes) (amount: size, x: _sliderPosition(size, sizes, minTo, maxTo), text: _bbNumber(size)),
+    ];
+    // The biggest text size (11 at most) at which neighbours keep a gap,
+    // measured in bold (the one the slider is on).
+    const biggest = 11.0, smallest = 6.0, gap = 3.0;
+    final scaler = MediaQuery.textScalerOf(context);
+    double measure(String text, double size) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: TextStyle(fontSize: size, fontWeight: FontWeight.w700)),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      final width = painter.width;
+      painter.dispose();
+      return width;
+    }
+    final widths = [for (final m in marks) measure(m.text, biggest)];
+    var fontSize = biggest;
+    for (var k = 1; k < marks.length; k++) {
+      final apart = (marks[k].x - marks[k - 1].x) * width - gap;
+      final half = (widths[k] + widths[k - 1]) / 2;
+      if (half > apart) fontSize = min(fontSize, biggest * apart / half);
+    }
+    fontSize = max(smallest, (fontSize * 2).floorToDouble() / 2);
+    final allIn = s.allIn('').trim();
+    // Room for a label: its width at [fontSize], and a little to spare.
+    double room(String text) => measure(text, fontSize) + 4;
+    return Stack(
+      key: const ValueKey('raise sizes'),
+      clipBehavior: Clip.none,
+      children: [
+        // Behind everything else, so it never gets in an amount's way.
+        Positioned(
+          left: width - room(allIn) / 2,
+          width: room(allIn),
+          top: 6,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _raiseTo = maxTo),
+            child: Text(
+              allIn,
+              key: const ValueKey('all-in label'),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: fontSize,
+                color: to == maxTo ? Colors.white70 : Colors.white24,
+                fontWeight: to == maxTo ? FontWeight.w700 : null,
+              ),
+            ),
+          ),
+        ),
+        // All-in's tick.
+        Positioned(
+          left: width - 0.5,
+          top: 0,
+          width: 1,
+          height: 5,
+          child: ColoredBox(color: to == maxTo ? Colors.white : Colors.white38),
+        ),
+        for (final m in marks) ...[
+          Positioned(
+            left: m.x * width - 0.5,
+            top: 0,
+            width: 1,
+            height: 5,
+            child: ColoredBox(color: m.amount == to ? Colors.white : Colors.white38),
+          ),
+          Positioned(
+            left: m.x * width - room(m.text) / 2,
+            width: room(m.text),
+            top: 6,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _raiseTo = m.amount),
+              child: Text(
+                m.text,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.visible,
+                style: TextStyle(
+                  fontSize: fontSize,
+                  color: m.amount == to ? Colors.white : Colors.white60,
+                  fontWeight: m.amount == to ? FontWeight.w700 : null,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// [chips] as a number of BB, as short as it goes: "5", "2.5"; from 1000
+  /// on in thousands with one decimal ("1.6K", "121.4K"), from a million
+  /// in millions ("1.2M").
+  static String _bbNumber(int chips) {
+    final bb = chips / TableConfig.bigBlind;
+    if (bb >= 1e6) return '${(bb / 1e6).toStringAsFixed(1)}M';
+    if (bb >= 1000) return '${(bb / 1000).toStringAsFixed(1)}K';
+    return bb == bb.roundToDouble() ? '${bb.round()}' : bb.toStringAsFixed(1);
   }
 
   /// While someone else acts in Free Play, simple training or online:
@@ -812,7 +1209,7 @@ class DecisionPanelState extends State<DecisionPanel> {
             maintainSize: true,
             maintainAnimation: true,
             maintainState: true,
-            child: _raiseSlider(s, canRaise: false, to: 0, minTo: 0, maxTo: 0, color: passiveColor),
+            child: _raiseArea(s, canRaise: false, to: 0, minTo: 0, maxTo: 0, sizes: const [], color: passiveColor),
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -1464,6 +1861,17 @@ class DecisionPanelState extends State<DecisionPanel> {
             text,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(color: color, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+        ],
+        // Online, after a hand: the user may show their cards to everyone.
+        if (online != null && online.canShowCards) ...[
+          OutlinedButton.icon(
+            key: const ValueKey('show my cards'),
+            onPressed: online.showCards,
+            icon: const Icon(Icons.visibility),
+            label: Text(s.showMyCards),
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
           ),
           const SizedBox(height: 12),
         ],

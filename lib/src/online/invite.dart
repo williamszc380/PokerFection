@@ -11,17 +11,28 @@ typedef Invite = ({String code, List<String> servers});
 /// opens the installed app at Play Online with the code filled in.
 const inviteScheme = 'pokerfection';
 
+/// Where the web version is published. Invites link to its join page
+/// (web/join.html), which opens the app at the room, or the host's own web
+/// version in the browser.
+const inviteSite = String.fromEnvironment('PF_SITE', defaultValue: 'https://williamszc380.github.io/PokerFection/');
+
 /// A link that opens the app at Play Online with [code], to try [servers]
 /// in order (each a repeated `server`; `ws://<address>:<port>/ws` written as
 /// just `<address>:<port>`).
-String inviteLink(String code, List<String> servers) => Uri(
-  scheme: inviteScheme,
-  host: 'join',
-  queryParameters: {
-    'code': code,
-    if (servers.isNotEmpty) 'server': [for (final s in servers) _shortServer(s)],
-  },
-).toString();
+String inviteLink(String code, List<String> servers) =>
+    Uri(scheme: inviteScheme, host: 'join', queryParameters: _inviteQuery(code, servers)).toString();
+
+/// The link to send for room [code], for everyone, with the app or without:
+/// the website's join page, with the same query as [inviteLink]. It offers
+/// the app, and the host's web version on the same Wi-Fi or from elsewhere
+/// (a secure page can't play against a home host itself).
+String siteInviteLink(String code, List<String> servers) =>
+    Uri.parse(inviteSite).resolve('join.html').replace(queryParameters: _inviteQuery(code, servers)).toString();
+
+Map<String, Object> _inviteQuery(String code, List<String> servers) => {
+  'code': code,
+  if (servers.isNotEmpty) 'server': [for (final s in servers) _shortServer(s)],
+};
 
 /// The address that opens the web version at a room, on a host that
 /// serves it: `http://<address>:<port>/?code=ABCDE`.
@@ -71,12 +82,13 @@ Invite? inviteFromUri(Uri? uri) {
   return (code: code, servers: [for (final s in uri!.queryParametersAll['server'] ?? const <String>[]) ?_server(s)]);
 }
 
-/// The invite in the address of a web page (the web version, opened at
-/// `http://<host>:<port>/?code=ABCDE`): the room, on that host's server.
+/// The invite in the address of a web page: the website's join page (the
+/// servers it lists), or the web version opened at
+/// `http://<host>:<port>/?code=ABCDE` (the room, on that host's server).
 Invite? inviteFromPage(Uri? page) {
-  final code = page?.queryParameters['code']?.trim().toUpperCase();
-  if (code == null || !_code.hasMatch(code)) return null;
-  return (code: code, servers: [?pageServer(page!)]);
+  final listed = inviteFromUri(page);
+  if (listed == null || listed.servers.isNotEmpty) return listed;
+  return (code: listed.code, servers: [?pageServer(page!)]);
 }
 
 /// The game server of the host that served [page] (the web version, over

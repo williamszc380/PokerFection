@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../branch_jobs.dart';
@@ -8,52 +9,86 @@ import 'postflop_solver.dart';
 import 'postflop_tree.dart';
 
 /// How a street's tree is split between threads: the coordinator keeps the
-/// top ("trunk") decisions, each "frontier" decision starts a branch that
-/// one worker solves in full.
+/// top ("trunk") decisions; each "frontier" node is solved by a worker: a
+/// decision with its whole branch, or a single showdown under the trunk.
+/// Frontier decisions are listed by id, showdowns as `-1 - id`.
 class PostflopWorkPlan {
   PostflopWorkPlan(PostflopTree tree, int workers, {required int runouts}) {
     final work = <int, double>{};
+    // Showdowns sweep every runout (for both players at once); folds are cheap.
+    double ending(PostflopTerminal node) => node.foldedBy >= 0 ? 1.0 : runouts + 1.0;
     double measure(PostflopNode node) => switch (node) {
-          // Showdowns sweep every runout for both players; folds are cheap.
-          PostflopTerminal() => node.foldedBy >= 0 ? 1.0 : 2.0 * runouts,
+          PostflopTerminal() => ending(node),
           PostflopDecision() => work[node.id] =
               node.actions.length + node.children.fold(0.0, (sum, c) => sum + measure(c)),
         };
-    measure(tree.root);
+    final total = measure(tree.root);
+    double workOf(int key) => key >= 0 ? work[key]! : ending(tree.terminals[-1 - key]);
 
-    // The coordinator keeps only the decisions made before anyone bets (so
-    // at most the check-check showdown is evaluated there); every decision
-    // facing a bet starts a worker branch. That spreads the costly showdowns
-    // evenly over the workers.
-    void split(PostflopNode node) {
-      if (node is! PostflopDecision) return;
-      final facingBet = node.actions.any((a) => a.move == PostflopMove.fold);
-      if (facingBet) {
-        frontier.add(node.id);
-        return;
+    // Branches up to [chunk] go to the workers whole; bigger ones are split
+    // further, the coordinator keeping their top decisions and the workers
+    // getting their showdowns. Smaller chunks share the work out more
+    // evenly but leave the coordinator more to do on its own (and more to
+    // send): the split that should finish first is kept. With no chunk,
+    // every decision facing a bet starts a branch (best for small trees).
+    var best = double.infinity;
+    var bestTrunk = <int>[], bestFrontier = <int>[], bestAssignments = <List<int>>[];
+    for (final pieces in const [0, 1, 2, 4, 8]) {
+      final chunk = pieces == 0 ? null : total / (workers * pieces);
+      final trunk = <int>[], frontier = <int>[];
+      var alone = 0.0; // the coordinator's own work
+      void split(PostflopNode node) {
+        switch (node) {
+          case PostflopTerminal():
+            if (node.foldedBy < 0) {
+              frontier.add(-1 - node.id);
+            } else {
+              alone += 1;
+            }
+          case PostflopDecision():
+            final branch = chunk == null
+                ? node.actions.any((a) => a.move == PostflopMove.fold)
+                : node != tree.root && work[node.id]! <= chunk;
+            if (branch) {
+              frontier.add(node.id);
+              return;
+            }
+            trunk.add(node.id);
+            alone += node.actions.length;
+            node.children.forEach(split);
+        }
       }
-      trunk.add(node.id);
-      node.children.forEach(split);
-    }
 
-    split(tree.root);
-    final order = [for (var i = 0; i < frontier.length; i++) i]
-      ..sort((a, b) => work[frontier[b]]!.compareTo(work[frontier[a]]!));
-    final load = List.filled(workers, 0.0);
-    assignments = List.generate(workers, (_) => <int>[]);
-    for (final slot in order) {
-      var w = 0;
-      for (var k = 1; k < workers; k++) {
-        if (load[k] < load[w]) w = k;
+      split(tree.root);
+      final order = [for (var i = 0; i < frontier.length; i++) i]
+        ..sort((a, b) => workOf(frontier[b]).compareTo(workOf(frontier[a])));
+      final load = List.filled(workers, 0.0);
+      final assignments = List.generate(workers, (_) => <int>[]);
+      for (final slot in order) {
+        var w = 0;
+        for (var k = 1; k < workers; k++) {
+          if (load[k] < load[w]) w = k;
+        }
+        assignments[w].add(slot);
+        load[w] += workOf(frontier[slot]);
       }
-      assignments[w].add(slot);
-      load[w] += work[frontier[slot]]!;
+      // Sending a node's reach and getting its values back costs about a
+      // third of a decision's action.
+      final time = alone + frontier.length / 3 + load.reduce(max);
+      if (time < best) {
+        best = time;
+        bestTrunk = trunk;
+        bestFrontier = frontier;
+        bestAssignments = assignments..removeWhere((a) => a.isEmpty);
+      }
     }
-    assignments.removeWhere((a) => a.isEmpty);
+    trunk = bestTrunk;
+    frontier = bestFrontier;
+    assignments = bestAssignments;
   }
 
-  final List<int> trunk = [];
-  final List<int> frontier = [];
+  late final List<int> trunk;
+  late final List<int> frontier;
   late final List<List<int>> assignments;
 }
 
@@ -69,7 +104,7 @@ Future<PostflopSolution> solvePostflopInParallel(
   final plan = PostflopWorkPlan(
     PostflopTree(spec, hands: 1),
     threads,
-    runouts: switch (spec.board.length) { 5 => 1, 4 => 48, _ => 40 },
+    runouts: showdownPasses(spec.board),
   );
   if (plan.frontier.isEmpty) return PostflopSolver(spec, ranges).solve(iterations: iterations);
   final coordinator = PostflopSolver.part(spec, ranges, owned: plan.trunk, frontier: plan.frontier);

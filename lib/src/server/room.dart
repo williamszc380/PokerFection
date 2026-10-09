@@ -242,6 +242,9 @@ class Room {
   /// turn, a look at a seat (token and turn, or token and seat).
   final Set<(String, int)> _helpTold = {}, _peeksTold = {};
 
+  /// The hand seats that showed their cards after the last hand.
+  final Set<int> _shown = {};
+
   /// The host's connection that got this hand's bot cards (when it was
   /// dealt, or when the host came back): only it may play the bots.
   ClientLink? _botDriver;
@@ -534,6 +537,8 @@ class Room {
           _usedHelp(p, m.hand, m.turnId);
         case Peek():
           _peek(p, m.hand, m.seat);
+        case ShowCards():
+          _showCards(p, m.hand);
         case Ready():
           _ready(p, m.hand);
         case Rebuy():
@@ -825,6 +830,24 @@ class Room {
     );
   }
 
+  /// [p] shows their cards once the hand is over (until the next is dealt):
+  /// everyone at the table sees them.
+  void _showCards(RoomPlayer p, int handNumber) {
+    final hand = _hand, dealt = _dealt;
+    if (hand == null || dealt == null || handNumber != hand.handNumber || !hand.hand.isOver) {
+      throw const _Refused(Rejection.stale);
+    }
+    final mine = _handSeatOf(p);
+    if (mine < 0 || !p.connected) throw const _Refused(Rejection.notYourTurn);
+    final cards = shownCardsFor(hand.hand, seat: mine);
+    if (cards == null) throw const _Refused(Rejection.illegal);
+    if (!_shown.add(mine)) return;
+    final shown = CardsShown(hand: handNumber, seat: dealt.seats[mine], cards: cards);
+    for (final q in _seated) {
+      _send(q, shown);
+    }
+  }
+
   /// Tells everyone at the table.
   void _tell(Notice notice) {
     for (final p in _seated) {
@@ -1101,6 +1124,7 @@ class Room {
     _handHelp = _settings.help;
     _helpTold.clear();
     _peeksTold.clear();
+    _shown.clear();
     final host = _host;
     _botDriver = host?.link;
     if (host != null && bots.isNotEmpty) {

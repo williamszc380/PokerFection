@@ -29,8 +29,6 @@ class StringsZh extends S {
   @override
   String get copyInviteLink => '复制邀请链接';
   @override
-  String get copyBrowserLink => '复制浏览器链接';
-  @override
   String get noInvite => '剪贴板里没有邀请或房间号。';
   @override
   String get inviteThisComputer => '这个服务器在这台电脑上，只有这台电脑能加入。';
@@ -562,6 +560,10 @@ class StringsZh extends S {
   String get seeCards => '看牌';
   @override
   String seeCardsQuestion(String name) => '查看 $name 的牌？所有人都会知道。';
+  @override
+  String get showMyCards => '亮出我的牌';
+  @override
+  String showNotice(String? name, String cards) => name == null ? '你亮牌：$cards' : '$name 亮牌：$cards';
   @override
   String helpNotice(String? name) => name == null ? '你使用了 GTO 辅助' : '$name 使用了 GTO 辅助';
   @override

@@ -27,29 +27,16 @@ Future<bool> copyText(BuildContext context, String text) async {
   return true;
 }
 
-/// The invite link to room [code] that [client] is in: it opens the app at
-/// the room, with every address to try (the host's local ones first).
-String appInviteLink(OnlineClient client, String code) {
+/// The invite link to room [code] that [client] is in: the website's join
+/// page, with every address to try (the host's local ones first). It opens
+/// the app at the room, or the host's web version in a browser.
+String siteInvite(OnlineClient client, String code) {
   final host = client.host;
-  return inviteLink(code, host == null ? [client.url] : hostServers(host));
+  return siteInviteLink(code, host == null ? [client.url] : hostServers(host));
 }
 
-/// For a room hosted here that also serves the web version: the page friends
-/// without the app open in a browser (the internet's once the router is
-/// open or a public address is set by hand, else the same Wi-Fi's); null
-/// otherwise.
-String? browserInviteLink(OnlineClient client, String code) {
-  final host = client.host;
-  if (host == null || !host.servesWeb) return null;
-  final public = host.publicEndpoint;
-  if (public != null) return browserLink(code, public.address, public.port);
-  final local = host.localAddresses.firstOrNull;
-  return local == null ? null : browserLink(code, local, host.port);
-}
-
-/// Shows the invite link to room [code] to copy (and the browser link, when
-/// the host serves the web version), rebuilt as the router setup goes on;
-/// for a room hosted here, with which ways in work.
+/// Shows the invite link to room [code] to copy, rebuilt as the router
+/// setup goes on; for a room hosted here, with which ways in work.
 Future<void> showInvite(BuildContext context, OnlineClient client, String code) {
   final s = S.of(context);
   final host = client.host;
@@ -58,7 +45,7 @@ Future<void> showInvite(BuildContext context, OnlineClient client, String code) 
     builder: (context) => StreamBuilder<void>(
       stream: host?.changes,
       builder: (context, _) {
-        final link = appInviteLink(client, code), page = browserInviteLink(client, code);
+        final link = siteInvite(client, code);
         return AlertDialog(
           title: Text(s.invite),
           content: SingleChildScrollView(
@@ -78,13 +65,6 @@ Future<void> showInvite(BuildContext context, OnlineClient client, String code) 
           ),
           actions: [
             TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(s.close)),
-            if (page != null)
-              TextButton(
-                onPressed: () async {
-                  if (await copyText(context, page) && context.mounted) Navigator.of(context).pop();
-                },
-                child: Text(s.copyBrowserLink),
-              ),
             FilledButton.icon(
               icon: const Icon(Icons.link),
               label: Text(s.copyInviteLink),

@@ -12,6 +12,8 @@ import 'package:pokerfection/src/gto/combos.dart';
 import 'package:pokerfection/src/gto/postflop/parallel_postflop_solver.dart';
 import 'package:pokerfection/src/gto/postflop/postflop_solver.dart';
 import 'package:pokerfection/src/gto/postflop/postflop_tree.dart';
+import 'package:pokerfection/src/gto/postflop/same_rank_wins_io.dart' as simd;
+import 'package:pokerfection/src/gto/postflop/same_rank_wins_web.dart' as web;
 import 'package:pokerfection/src/gto/postflop/showdown.dart';
 
 List<int> cards(String text) => [for (final c in parseCards(text)) c.index];
@@ -53,6 +55,46 @@ void main() {
       expect(fast[c], closeTo(expected, 1e-9), reason: 'hand $c');
     }
   });
+
+  for (final turn in ['Kh Qd 7c 4s', 'Kh Qh 7c 4s', 'Kh Qh 7c 4c', 'Kh Qh 7h 7c']) {
+    test('rivers of one rank shown down at once sum the same as one by one ($turn)', () {
+      final rng = Random(5);
+      final board = cards(turn);
+      final hands = PostflopHands(board);
+      final n = hands.length;
+      final weights = [
+        for (var p = 0; p < 2; p++) Float64List.fromList([for (var c = 0; c < n; c++) rng.nextDouble()]),
+      ];
+      final groups = sameRankRivers(board);
+      expect(groups, isNotEmpty);
+      for (final rivers in groups) {
+        // One by one.
+        final slow = [Float64List(n), Float64List(n)];
+        for (final river in rivers) {
+          final ranking = RunoutRanking([...board, river], hands.cardA, hands.cardB);
+          addShowdownWinsForBoth(ranking, weights[0], weights[1], slow[0], slow[1], ShowdownScratch());
+        }
+        // At once, natively (32-bit SIMD) and in browsers.
+        final ranking = RunoutRanking.sameRank(board, rivers, hands.cardA, hands.cardB);
+        final held = Float64List(n), seen = Float64List(n);
+        for (var c = 0; c < n; c++) {
+          held[c] = rivers.where((r) => r == hands.cardA[c] || r == hands.cardB[c]).length.toDouble();
+          seen[c] = rivers.length - held[c];
+        }
+        final native = [Float64List(n), Float64List(n)], browser = [Float64List(n), Float64List(n)];
+        simd.addSameRankWins(
+            ranking, weights[0], weights[1], held, seen, native[0], native[1], simd.SameRankScratch(n));
+        web.addSameRankWins(
+            ranking, weights[0], weights[1], held, seen, browser[0], browser[1], web.SameRankScratch(n));
+        for (var p = 0; p < 2; p++) {
+          for (var c = 0; c < n; c++) {
+            expect(browser[p][c], closeTo(slow[p][c], 1e-9), reason: 'rivers $rivers, player $p, hand $c');
+            expect(native[p][c], closeTo(slow[p][c], 1e-5 * (1 + slow[p][c])), reason: 'rivers $rivers, player $p, hand $c');
+          }
+        }
+      }
+    });
+  }
 
   group('every postflop tree path is legal in the game engine', () {
     for (final (stacks, rule) in const [

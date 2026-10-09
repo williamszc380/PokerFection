@@ -53,6 +53,14 @@ Map<int, List<PlayingCard>> botCardsFor(PokerHand hand, Iterable<int> botSeats) 
 /// (only while the hand runs, and when the host lets players look: [allowed]).
 /// Null when they may not: looking is off, the hand is over, the seat is
 /// their own or not in the hand.
+/// The cards hand seat [seat] shows to everyone once [hand] is over (their
+/// own, by their choice); null while it goes on, or for a seat with no
+/// cards.
+List<PlayingCard>? shownCardsFor(PokerHand hand, {required int seat}) {
+  if (!hand.isOver || seat < 0 || seat >= hand.playerCount) return null;
+  return hand.knows(seat) ? hand.holeCards(seat) : null;
+}
+
 List<PlayingCard>? peekCardsFor(PokerHand hand, {required int seat, required int viewerSeat, required bool allowed}) {
   if (!allowed || hand.isOver || seat == viewerSeat) return null;
   if (seat < 0 || seat >= hand.playerCount || viewerSeat < 0 || viewerSeat >= hand.playerCount) return null;

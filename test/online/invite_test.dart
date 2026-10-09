@@ -28,6 +28,10 @@ void main() {
       'ABCDE',
       <String>[],
     );
+    // The website's join page (the link copied by default) carries the same servers.
+    final site = siteInviteLink('K7M2Q', [local, public]);
+    expect(site, startsWith('$inviteSite' 'join.html?code=K7M2Q&server='));
+    expectInvite(parseInvite('Come play: $site'), 'K7M2Q', [local, public]);
     // A bare code, as typed; and the route Android and iOS hand the app.
     expectInvite(parseInvite(' abcde '), 'ABCDE', <String>[]);
     expectInvite(inviteFromUri(Uri.parse('/?code=ABCDE&server=10.0.0.5:47474')), 'ABCDE', ['ws://10.0.0.5:47474/ws']);

@@ -67,6 +67,11 @@ class TableScreen extends StatefulWidget {
 }
 
 class _TableScreenState extends State<TableScreen> {
+  /// From this size on (a PC or a tablet held sideways) the table takes the
+  /// whole screen and the decisions sit in a card in the bottom-right corner,
+  /// [_cornerGap] from the edges.
+  static const _cornerMinWidth = 900.0, _cornerMinHeight = 600.0, _cornerGap = 12.0;
+
   // Training saves each mistake to the drills.
   late final TableController _controller = widget.controller ??
       TableController(
@@ -779,17 +784,40 @@ class _TableScreenState extends State<TableScreen> {
                   autofocus: true,
                   child: LayoutBuilder(
                     builder: (context, constraints) {
+                      // A big wide screen (a PC): the table across all of it, and
+                      // the decisions in a card in the bottom-right corner, which
+                      // the seats keep clear of.
+                      final corner = constraints.maxWidth >= constraints.maxHeight &&
+                          constraints.maxWidth >= _cornerMinWidth &&
+                          constraints.maxHeight >= _cornerMinHeight;
+                      final card = Size(
+                        (constraints.maxWidth * 0.33).clamp(360.0, 440.0),
+                        (constraints.maxHeight * 0.42).clamp(300.0, 380.0),
+                      );
+                      final avoid = Rect.fromLTWH(
+                        constraints.maxWidth - card.width - 2 * _cornerGap,
+                        constraints.maxHeight - card.height - 2 * _cornerGap,
+                        card.width + 2 * _cornerGap,
+                        card.height + 2 * _cornerGap,
+                      );
                       final table = Stack(
                         children: [
                           Positioned.fill(
                             child: LayoutBuilder(
                               builder: (context, area) => _TableArea(
                                 controller: _controller,
-                                geometry: TableGeometry(
-                                  area.biggest,
-                                  _controller.view.placeCount,
-                                  places: _controller.view.places,
-                                ),
+                                geometry: corner
+                                    ? TableGeometry.clearOf(
+                                        area.biggest,
+                                        _controller.view.placeCount,
+                                        places: _controller.view.places,
+                                        avoid: avoid,
+                                      )
+                                    : TableGeometry(
+                                        area.biggest,
+                                        _controller.view.placeCount,
+                                        places: _controller.view.places,
+                                      ),
                                 onSeatTap: switch (_online) {
                                   // Online: a range, or a look at the player's cards.
                                   final online? => (seat) => _onlineSeat(context, online, seat),
@@ -813,22 +841,36 @@ class _TableScreenState extends State<TableScreen> {
                       final panel = DecisionPanel(
                         key: _panel,
                         controller: _controller,
+                        // One row of buttons when there's width to spare.
+                        compact: constraints.maxWidth >= constraints.maxHeight,
                         onLobby: switch (_online) {
                           final online? => () => _openLobby(context, online),
                           null => null,
                         },
                       );
-                      // Landscape (phones are played sideways): the table on the left
-                      // half, the decisions on the right. Portrait: one above the other.
-                      if (constraints.maxWidth >= constraints.maxHeight) {
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                      if (corner) {
+                        return Stack(
                           children: [
-                            Expanded(child: table),
-                            SizedBox(width: constraints.maxWidth / 2, child: panel),
+                            Positioned.fill(child: table),
+                            Positioned(
+                              right: _cornerGap,
+                              bottom: _cornerGap,
+                              width: card.width,
+                              height: card.height,
+                              child: DecoratedBox(
+                                position: DecorationPosition.foreground,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: ClipRRect(borderRadius: BorderRadius.circular(14), child: panel),
+                              ),
+                            ),
                           ],
                         );
                       }
+                      // Anything smaller: one above the other, the decisions
+                      // across the bottom.
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [

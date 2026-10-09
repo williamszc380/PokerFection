@@ -42,11 +42,14 @@ class DecisionRecord {
 /// pressed Show GTO or, with a [target], looked at the target's cards; a
 /// null name or target is the user.
 class HandNote {
-  const HandNote({required this.name, this.peek = false, this.target});
+  const HandNote({required this.name, this.peek = false, this.target, this.shown});
 
   final String? name;
   final bool peek;
   final String? target;
+
+  /// The cards a player showed after the hand.
+  final List<PlayingCard>? shown;
 }
 
 /// The user's scored decisions in one hand.

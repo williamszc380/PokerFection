@@ -28,6 +28,27 @@ void main() {
     });
   }
 
+  test('a warm start (from the last hand\'s game) gives the same answer on several threads as on one', () async {
+    final last = PreflopSolver(PreflopTree(PreflopSpec(stacks: List.filled(6, 10000))), equity).solve(iterations: 20);
+    final spec = PreflopSpec(stacks: [10600, 10000, 10000, 9400, 10000, 10000]);
+    final tree = PreflopTree(spec);
+    final serial = PreflopSolver(tree, equity, warm: warmStrategies(tree, last)).solve(iterations: 12);
+    final parallel = await solvePreflopInParallel(spec, equity, iterations: 12, threads: 4, warmFrom: last);
+    expect(parallel.strategy, serial.strategy);
+    // And it did start from the last hand's answer.
+    final cold = PreflopSolver(tree, equity).solve(iterations: 12);
+    expect(serial.strategy, isNot(cold.strategy));
+  });
+
+  test('a game warm-started from its own answer starts from its strategies', () {
+    final tree = PreflopTree(PreflopSpec(stacks: [6000, 10000, 8000]));
+    final solution = PreflopSolver(tree, equity).solve(iterations: 30);
+    final warm = warmStrategies(tree, solution);
+    for (var i = 0; i < warm.length; i++) {
+      expect(warm[i], closeTo(solution.strategy[i], 1e-6), reason: 'entry $i');
+    }
+  });
+
   test('the app\'s background solve (all cores, off the UI thread) matches too', () async {
     final spec = PreflopSpec(stacks: [3000, 3000, 3000, 3000]);
     final serial = PreflopSolver(PreflopTree(spec), equity).solve(iterations: 20);

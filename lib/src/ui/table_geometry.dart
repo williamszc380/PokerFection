@@ -24,6 +24,45 @@ class TableGeometry {
     radiusY = max((yBottom - yTop) / 2, 40.0);
   }
 
+  /// The best table in [size] whose seats (their cards, info boxes and
+  /// action labels) all keep clear of [avoid] (the decisions' card in a
+  /// corner): of the tables from the top-left corner, narrower or shorter
+  /// than [size] (never under 55% of either), the one with the biggest
+  /// seats and cards, then the biggest felt.
+  factory TableGeometry.clearOf(Size size, int seatCount, {List<int>? places, required Rect avoid}) {
+    TableGeometry? best;
+    for (var width = size.width; width >= size.width * 0.55; width -= 16) {
+      // The tallest table this wide that fits.
+      for (var height = size.height; height >= size.height * 0.55; height -= 8) {
+        final table = TableGeometry(Size(width, height), seatCount, places: places);
+        if (table._seatsReach(avoid)) continue;
+        if (best == null ||
+            table.scale > best.scale + 1e-9 ||
+            (table.scale > best.scale - 1e-9 && table.radiusX * table.radiusY > best.radiusX * best.radiusY)) {
+          best = table;
+        }
+        break;
+      }
+    }
+    return best ?? TableGeometry(Size(size.width, size.height * 0.55), seatCount, places: places);
+  }
+
+  /// Whether any place's seat (its cards above, its action label below)
+  /// reaches into [area].
+  bool _seatsReach(Rect area) {
+    for (var p = 0; p < seatCount; p++) {
+      final c = place(p);
+      final seat = Rect.fromLTRB(
+        c.dx - seatBoxSize.width / 2,
+        c.dy - seatBoxSize.height / 2 - seatCardsAbove,
+        c.dx + seatBoxSize.width / 2,
+        c.dy + seatBoxSize.height / 2 + pillHeight,
+      );
+      if (seat.overlaps(area)) return true;
+    }
+    return false;
+  }
+
   final Size size;
   final int seatCount;
 
