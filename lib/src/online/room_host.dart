@@ -1,32 +1,16 @@
 /// Hosting a room on this device: Create Room starts the game server inside
 /// the app (see host_here.dart), and the host's own app joins it like
 /// everyone else. Friends on the same network come in at this device's
-/// local address; friends on the internet at the router's public address,
-/// once the router has opened the port.
+/// local address; friends anywhere else connect straight to this device
+/// through the meeting service (PeerHost, see peer_config.dart), with the
+/// room's code as its name there. A browser hosts the room inside the page
+/// (InProcessHost): everyone comes in through the meeting service there.
 library;
 
-/// Whether friends on the internet can come in through the router.
-enum InternetAccess {
-  /// Setting up the router (a few seconds).
-  checking,
+import 'online_socket.dart';
+import 'peer_status.dart';
 
-  /// The router opened the port, at a public address.
-  ready,
-
-  /// No router answered the automatic setup (UPnP).
-  noRouter,
-
-  /// The router refused to open the port.
-  refused,
-
-  /// The router has no public address of its own (the internet provider
-  /// shares one, CGNAT; or a second router sits in front of it).
-  notPublic,
-
-  /// This device can't set up the router (iPhone and iPad need a
-  /// permission from Apple for it): only by hand.
-  byHand,
-}
+export 'peer_status.dart';
 
 /// A room's game server running on this device.
 abstract interface class RoomHost {
@@ -36,32 +20,55 @@ abstract interface class RoomHost {
   /// Where this device's own app connects.
   String get ownServer;
 
+  /// The host's own app's connection to the room when it is made inside
+  /// the app (a room hosted in a browser has no server to connect to); null
+  /// when the app connects to [ownServer] like anyone else.
+  OnlineSocket? connectOwn();
+
+  /// Whether the room runs in a browser tab: no game server, so no way in
+  /// on the same Wi-Fi of its own (friends there come in through the
+  /// meeting service too), and it closes with the tab.
+  bool get inBrowser;
+
   /// This device's addresses on its local networks, best first.
   List<String> get localAddresses;
 
-  InternetAccess get internet;
+  /// Whether friends on the internet can come in (through the meeting
+  /// service), and if not, why.
+  PeerStatus get internet;
 
-  /// Where friends on the internet come in: the router's public address
-  /// and port once [internet] is ready, else the one set by hand
-  /// ([byHand]), if any.
-  ({String address, int port})? get publicEndpoint;
+  /// The code this device holds the room's name for at the meeting service:
+  /// the room's own code (the room is made with it). Null when it holds none
+  /// (someone else had it, or this build can't make direct connections):
+  /// invites then name no room there, or they would lead to someone else's.
+  String? get peerCode;
 
-  /// The router's public address and port as the host typed them, for a
-  /// router that can't be opened automatically (its port forwarded to this
-  /// device by hand). Nothing can check it works.
-  ({String address, int port})? get byHand;
-  set byHand(({String address, int port})? value);
+  /// The router's public address and port, when the router opened the port
+  /// by itself (UPnP): a second way in from the internet, for guests whose
+  /// network can't connect directly. Null otherwise; nobody is ever asked
+  /// to set up a router.
+  ({String address, int port})? get routerEndpoint;
 
   /// Whether it serves the web version to browsers (when the app has one).
   bool get servesWeb;
 
-  /// Fires whenever [internet] or [publicEndpoint] changes.
+  /// Fires whenever [internet], [peerCode] or [routerEndpoint] changes.
   Stream<void> get changes;
+
+  /// Checks the way in from the internet now (the app is back on screen:
+  /// the connection to the meeting service may have died meanwhile), and
+  /// makes it again if needed.
+  void checkInternet();
+
+  /// Completes once the automatic router setup has finished, whether or not
+  /// it opened the port (tool/host_check.dart waits for it).
+  Future<void> get routerSetup;
 
   /// Completes once it has stopped.
   Future<void> get stopped;
 
-  /// Stops serving (the room closes for everyone, if still open) and
-  /// closes the router's port again.
+  /// Stops serving (the room closes for everyone, if still open), gives the
+  /// room's name at the meeting service back, and closes the router's port
+  /// again.
   Future<void> stop();
 }

@@ -15,8 +15,9 @@ import 'src/ui/online/online_screen.dart';
 /// `--profile=N` keeps a separate set of settings (another name online), to
 /// play several copies of the app against each other on one computer. An
 /// invite link (pokerfection://join?code=...) opens Play Online with it; so
-/// does the web version opened at a room (a host's app serves it at
-/// `http://<host>:<port>/?code=...`).
+/// does the web version opened at a room: the website from an invite's join
+/// page (`?code=K7M2Q&server=peer:K7M2Q`, the room through the meeting
+/// service), or a host's app serving it at `http://<host>:<port>/?code=...`.
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   // Phones and tablets are played sideways: the table on the left, the

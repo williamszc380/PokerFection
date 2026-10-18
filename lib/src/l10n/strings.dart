@@ -10,7 +10,7 @@ import '../gto/hand_read.dart';
 import '../gto/spot_strategy.dart';
 import '../game/history.dart' show HandNote;
 import '../online/protocol.dart' show CloseReason, HelpLevel, JoinError;
-import '../online/room_host.dart' show InternetAccess;
+import '../online/peer_status.dart' show PeerStatus;
 import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
 import 'strings_en.dart';
 import 'strings_es.dart';
@@ -334,44 +334,43 @@ abstract class S {
   /// Under the server field: what an empty one means.
   String get serverHint;
 
-  /// Hosting a room on this device: starting it, failing to, and why a
-  /// browser can't (Create Room greyed out).
+  /// Hosting a room on this device: starting it, failing to, and why this
+  /// browser can't (no direct connections: Create Room greyed out).
   String get startingRoom;
   String get cantStartRoom;
   String get cantHostInBrowser;
 
-  /// Joining from the website (https) failed: browsers block it from
-  /// reaching a room on someone's device.
-  String get websiteCantJoin;
-
-  /// Joining with just a code found no such room on this network.
+  /// Joining with just a code found the room nowhere it could look (not on
+  /// this network, and the meeting service couldn't be asked).
   String get roomNotNearby;
 
-  /// The ways into a room hosted here: the same network, and the internet
-  /// (through the router, or at the public address set by hand: [byHand],
-  /// "address:port"); and how to open the router by hand ([address] is
-  /// this device's on the local network).
-  String sameWifi(bool yes);
-  String internetStatus(InternetAccess access);
-  String get internetByHand;
-  String internetHelp({
-    required InternetAccess access,
-    required int port,
-    String? address,
-    String? byHand,
-    required bool windows,
-    required bool phone,
-  });
+  /// Joining (or getting a dropped connection back) failed because the
+  /// host answered but this device can't connect to it directly from its
+  /// network (no relay): what to try.
+  String get noDirectRoute;
 
-  /// The host's public address, typed in the lobby when the router can't
-  /// be opened automatically: the box, what isn't one, and its "?" (forward
-  /// [port] to [address], this device's on the local network).
-  String get publicAddress;
-  String get notPublicAddress;
-  String publicAddressHelp({required int port, String? address, required bool windows});
+  /// Creating or joining a room on a server set by hand that can't be
+  /// reached.
+  String get cantReachServer;
+
+  /// On the website (https), a ws:// server set by hand: the browser won't
+  /// connect to it from a secure page.
+  String get wsOnWebsite;
+
+  /// The ways into a room hosted here: the same network, and the internet
+  /// (direct connections through the meeting service, see PeerStatus,
+  /// with a short reason when not available); and the "?" next to them,
+  /// which says how it works and, when not available, why ([status]);
+  /// with what to mind on [windows], a [phone] or in a [browser] tab. A
+  /// room hosted in a browser has no way in on the same Wi-Fi of its own
+  /// ([sameWifiAppOnly], greyed out).
+  String sameWifi(bool yes);
+  String get sameWifiAppOnly;
+  String internetStatus(PeerStatus status);
+  String internetHelp({required PeerStatus status, required bool windows, required bool phone, bool browser = false});
   String get connecting;
 
-  /// Why creating or joining failed (null: the server can't be reached).
+  /// Why creating or joining failed (null: the room can't be reached).
   String joinError(JoinError? error);
 
   /// The room's name, from its code: "Room K7QXA".

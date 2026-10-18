@@ -5,6 +5,7 @@ import 'dart:math';
 import '../engine/rules.dart';
 import '../online/clock.dart';
 import '../online/protocol.dart';
+import '../online/seat_proof.dart';
 import '../online/timing.dart';
 import 'client_link.dart';
 import 'room.dart';
@@ -16,7 +17,13 @@ import 'room.dart';
 /// that its messages go to that room. A player the host removed can't join
 /// or rejoin it. Each connection is limited: so many
 /// messages a second, a few malformed ones, and it is dropped when silent
-/// for too long. Each address may only open so many rooms a minute.
+/// for too long, or when it hasn't asked for a room within [joinWait]
+/// (anyone who knows a room's code can open connections to its host
+/// through the meeting service: they mustn't pile up). Each address may
+/// only open so many rooms a minute.
+///
+/// A player coming back over a direct connection proves their seat rather
+/// than naming its token (RejoinRoom.proved, see seat_proof.dart).
 class RoomRegistry {
   RoomRegistry({
     Clock? clock,
@@ -24,6 +31,8 @@ class RoomRegistry {
     this.maxRooms = 200,
     this.joinsPerMinute = 20,
     this.onRoomClosed,
+    this.nextCode,
+    this.atMeetingService,
     void Function(String message)? log,
   }) : _clock = clock ?? SystemClock(),
        _random = random ?? Random.secure(),
@@ -44,6 +53,22 @@ class RoomRegistry {
   /// Told whenever a room closes (a host on its own device then stops).
   final void Function(Room room)? onRoomClosed;
 
+  /// The code the next room should have, when one is already decided (a
+  /// host reserves its room's code at the meeting service before the room
+  /// exists, see PeerHost); null, or a code a room has already, and a
+  /// random one is made.
+  final String? Function()? nextCode;
+
+  /// Whether room [code] can be reached through the meeting service now
+  /// (its host holds the name, see PeerHost): its welcomes say so, so
+  /// guests know they may come back that way. Null: no room can (a server
+  /// of its own).
+  final bool Function(String code)? atMeetingService;
+
+  /// How long a new connection has to create, join or rejoin a room before
+  /// it is dropped: a device asks at once.
+  static const joinWait = Duration(seconds: 15);
+
   final Map<String, Room> _rooms = {};
   final Map<String, List<int>> _joins = {};
   final Set<_Connection> _connections = {};
@@ -58,6 +83,18 @@ class RoomRegistry {
   /// Starts serving a new connection.
   void accept(ClientLink link) => _connections.add(_Connection(this, link));
 
+  /// Connections open now (in a room or not yet).
+  int get connectionCount => _connections.length;
+
+  /// The tokens of everyone with a seat in a room now (not left, not
+  /// removed): a guest coming back shows a pass made with one (seatPass),
+  /// so a host flooded with made-up offers still lets them in.
+  Iterable<String> get seatTokens sync* {
+    for (final room in _rooms.values) {
+      yield* room.tokensSeated;
+    }
+  }
+
   /// The server is stopping: every room ends, for [reason].
   void shutdown([CloseReason reason = CloseReason.serverRestart]) {
     for (final room in [..._rooms.values]) {
@@ -68,11 +105,26 @@ class RoomRegistry {
     }
   }
 
-  String _newCode() {
+  /// A random room code: [codeLength] of the [codeLetters], never all
+  /// digits. An invite names a room through the meeting service as
+  /// `peer:CODE`, and older apps (and the old invite page) read
+  /// `peer:23456` as the server "peer" at port 23456 and would try it.
+  static String randomCode(Random random) {
     while (true) {
       final code = String.fromCharCodes([
-        for (var i = 0; i < codeLength; i++) codeLetters.codeUnitAt(_random.nextInt(codeLetters.length)),
+        for (var i = 0; i < codeLength; i++) codeLetters.codeUnitAt(random.nextInt(codeLetters.length)),
       ]);
+      if (!_allDigits.hasMatch(code)) return code;
+    }
+  }
+
+  static final _allDigits = RegExp(r'^\d+$');
+
+  String _newCode() {
+    final wanted = nextCode?.call();
+    if (wanted != null && !_rooms.containsKey(wanted)) return wanted;
+    while (true) {
+      final code = randomCode(_random);
       if (!_rooms.containsKey(code)) return code;
     }
   }
@@ -120,8 +172,9 @@ class RoomRegistry {
       if (_rooms.length >= maxRooms) {
         error = JoinError.serverFull;
       } else {
+        final code = _newCode();
         final room = Room(
-          code: _newCode(),
+          code: code,
           settings: m.settings,
           bots: m.bots,
           clock: _clock,
@@ -130,6 +183,7 @@ class RoomRegistry {
             _rooms.remove(room.code);
             onRoomClosed?.call(room);
           },
+          atMeetingService: atMeetingService == null ? null : () => atMeetingService!(code),
           log: _log,
         );
         _rooms[room.code] = room;
@@ -151,8 +205,16 @@ class RoomRegistry {
       }
     } else if (m is RejoinRoom) {
       final room = _rooms[m.code.trim().toUpperCase()];
-      final barred = room != null && room.bars(token: m.token);
-      final player = barred ? null : room?.rejoin(c.link, m.token);
+      final token = switch (m.proof) {
+        null => m.token,
+        // Proven for this connection only: one that can't say which it is proves nothing.
+        final proof => switch (c.link) {
+          BoundConnection(binding: final binding?) => room?.tokenProven((t) => sameProof(seatProof(t, binding), proof)),
+          _ => null,
+        },
+      };
+      final barred = room != null && token != null && room.bars(token: token);
+      final player = barred || token == null ? null : room?.rejoin(c.link, token);
       if (room == null) {
         // Closed while the player was away (rooms live only in memory).
         error = JoinError.roomGone;
@@ -176,6 +238,9 @@ class _Connection {
     _subscription = link.messages.listen(_onText, onDone: _onDone, onError: (Object _) => _onDone());
     _lastRefill = registry._clock.nowMs;
     _watchSilence();
+    _joinDeadline = registry._clock.schedule(RoomRegistry.joinWait, () {
+      if (_room == null) drop();
+    });
   }
 
   final RoomRegistry registry;
@@ -196,6 +261,10 @@ class _Connection {
   static const _maxBad = 5;
 
   Timer? _silence;
+
+  /// Drops the connection if it hasn't got into a room by then (pings alone
+  /// don't keep it).
+  Timer? _joinDeadline;
 
   void _watchSilence() {
     _silence?.cancel();
@@ -239,6 +308,7 @@ class _Connection {
       if (opened != null) {
         _room = opened.$1;
         _player = opened.$2;
+        _joinDeadline?.cancel();
       }
       return;
     }
@@ -256,6 +326,7 @@ class _Connection {
     if (_done) return;
     _done = true;
     _silence?.cancel();
+    _joinDeadline?.cancel();
     registry._connections.remove(this);
     final room = _room, player = _player;
     // The player is away (unless they left, or came back on another connection).

@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
-# ./run [--profile=N] [flutter run options]: see tool/run.dart.
-PATH="${FLUTTER_ROOT:-$HOME/dev/flutter}/bin:$PATH" exec dart run "$(dirname "$0")/tool/run.dart" "$@"
+# ./run [--profile=N] [flutter run options]; ./run -h for help: see tool/run.dart.
+PATH="${FLUTTER_ROOT:-$HOME/dev/flutter}/bin:$PATH" exec dart "$(dirname "$0")/tool/run.dart" "$@"

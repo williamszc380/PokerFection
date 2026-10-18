@@ -1,6 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pokerfection/src/online/invite.dart';
+import 'package:pokerfection/src/online/peer_config.dart';
+import 'package:pokerfection/src/online/room_host.dart';
 import 'package:pokerfection/src/server/upnp.dart';
+
+import 'fake_room_host.dart';
 
 /// [invite] is room [code], with [servers] in that order.
 void expectInvite(Invite? invite, String code, List<String> servers) {
@@ -40,17 +44,88 @@ void main() {
     expect(isThisComputer(local), isFalse);
   });
 
-  test("a public address typed by hand: the port defaults to the room's; local addresses are refused", () {
-    expect(parsePublicAddress(' 203.0.113.7 ', port: 47475), (address: '203.0.113.7', port: 47475));
-    expect(parsePublicAddress('203.0.113.7:47500', port: 47474), (address: '203.0.113.7', port: 47500));
-    expect(parsePublicAddress('http://203.0.113.7:47474/health', port: 47474), (address: '203.0.113.7', port: 47474));
-    expect(parsePublicAddress('MyHome.duckdns.org', port: 47474), (address: 'myhome.duckdns.org', port: 47474));
-    for (final wrong in ['', '203.0.113', '192.168.1.20', '100.72.1.1', 'localhost', '203.0.113.7:99999', 'a b']) {
-      expect(parsePublicAddress(wrong, port: 47474), isNull, reason: wrong);
-    }
+  test('an invite to a room hosted here names its addresses on the same Wi-Fi, then the room through the meeting '
+      "service, then the router's public address once the router opened the port by itself", () async {
+    final net = FakeInternet();
+    final host = await TestRoomHost.start(net, code: 'K7M2Q', localAddresses: ['192.168.1.20', '10.0.0.5']);
+    expect(host.peerCode, 'K7M2Q');
+    expect(hostServers(host, 'K7M2Q'), ['ws://192.168.1.20:47474/ws', 'ws://10.0.0.5:47474/ws', 'peer:K7M2Q']);
+    // The silent backup: friends whose network can't connect directly may still come in there.
+    host.routerEndpoint = (address: '203.0.113.7', port: 47475);
+    final servers = hostServers(host, 'K7M2Q');
+    expect(servers, [
+      'ws://192.168.1.20:47474/ws',
+      'ws://10.0.0.5:47474/ws',
+      'peer:K7M2Q',
+      'ws://203.0.113.7:47475/ws',
+    ]);
+    expectInvite(parseInvite(siteInviteLink('K7M2Q', servers)), 'K7M2Q', servers);
+    // A host that serves its own web version says so: the join page then offers its addresses to browsers too
+    // (on the same Wi-Fi they need no internet), after the website.
+    final withWeb = siteInviteLink('K7M2Q', servers, web: true);
+    expect(Uri.parse(withWeb).queryParameters['web'], '1');
+    expect(Uri.parse(siteInviteLink('K7M2Q', servers)).queryParameters, isNot(contains('web')));
+    expectInvite(parseInvite(withWeb), 'K7M2Q', servers);
+    await host.stop();
   });
 
-  test("the router's answers are read: where its description is, its port service, and public addresses", () {
+  test('an invite never names an all-digit room code through the meeting service in a form older apps read as a '
+      'server (rooms never get such codes)', () {
+    // An older app's reading of an invite entry (as released): "address:port", or a whole ws:// address.
+    String? olderApp(String value) {
+      final url = value.contains('://') ? value : 'ws://$value/ws';
+      final uri = Uri.tryParse(url);
+      return uri == null || uri.host.isEmpty || (uri.scheme != 'ws' && uri.scheme != 'wss') ? null : url;
+    }
+
+    expect(olderApp('peer:K7M2Q'), isNull);
+    expect(olderApp('peer:2345A'), isNull);
+    expect(olderApp('peer:23456'), isNotNull, reason: 'why rooms never get all-digit codes (see room_test)');
+  });
+
+  test('a code someone else holds at the meeting service is never named: the invite would lead to their '
+      'room', () async {
+    final net = FakeInternet();
+    await net.broker.connect('$peerBroker?id=${hostPeerId('K7M2Q')}&token=someoneelse');
+    final host = await TestRoomHost.start(net, code: 'K7M2Q');
+    expect(host.internet, const PeerStatus.unavailable(PeerTrouble.codeTaken));
+    expect(host.peerCode, isNull);
+    expect(hostServers(host, 'K7M2Q'), ['ws://192.168.1.20:47474/ws']);
+    await host.stop();
+  });
+
+  test("a guest's invite names where the guest reached the room, then the room through the meeting service only "
+      "when the host said the room is there; a room on a server of its own, or whose host holds no name at the "
+      "meeting service, is never named there (the name could be anyone's)", () {
+    expect(guestServers('ws://192.168.1.20:47474/ws', 'K7M2Q', peer: true), [
+      'ws://192.168.1.20:47474/ws',
+      'peer:K7M2Q',
+    ]);
+    expect(guestServers('peer:K7M2Q', 'K7M2Q', peer: true), ['peer:K7M2Q']);
+    expect(guestServers('wss://poker.example.org/ws', 'K7M2Q', peer: false), ['wss://poker.example.org/ws']);
+    expect(guestServers('ws://192.168.1.20:47474/ws', 'K7M2Q', peer: false), ['ws://192.168.1.20:47474/ws']);
+  });
+
+  test("the website opens at a room from the join page's link (the room through the meeting service), and a page "
+      'there tries no plain ws:// address (the browser refuses those on a secure page); a page from a host keeps them',
+      () {
+    expectInvite(
+      inviteFromPage(Uri.parse('https://williamszc380.github.io/PokerFection/?code=K7M2Q&server=peer%3AK7M2Q')),
+      'K7M2Q',
+      ['peer:K7M2Q'],
+    );
+    expectInvite(inviteFromPage(Uri.parse('https://williamszc380.github.io/PokerFection/?code=K7M2Q')), 'K7M2Q', []);
+    const servers = ['ws://192.168.1.20:47474/ws', 'peer:K7M2Q', 'wss://pf.example.com/ws', 'ws://203.0.113.7:47475/ws'];
+    expect(reachableFromPage(servers, Uri.parse('https://williamszc380.github.io/PokerFection/')), [
+      'peer:K7M2Q',
+      'wss://pf.example.com/ws',
+    ]);
+    expect(reachableFromPage(servers, Uri.parse('http://192.168.1.20:47474/?code=K7M2Q')), servers);
+    expect(reachableFromPage(servers, Uri.parse('http://localhost:8080/')), servers);
+  });
+
+  test("the router's answers are read: where its description is, its port service, and whether its address is "
+      'really public (a shared one leads nowhere)', () {
     expect(
       ssdpLocation(
         'HTTP/1.1 200 OK\r\nCACHE-CONTROL: max-age=120\r\nLocation: http://192.168.1.1:5000/rootDesc.xml\r\n'

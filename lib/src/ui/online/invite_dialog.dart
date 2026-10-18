@@ -1,13 +1,12 @@
 /// Inviting friends to a room, from the lobby and from the table (☰ >
 /// Table): the invite to send, and for a room hosted on this device which
-/// ways in work (and, in the lobby, the public address set by hand).
+/// ways in work.
 library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../../app/app_settings.dart';
 import '../../l10n/strings.dart';
 import '../../online/invite.dart';
 import '../../online/online_client.dart';
@@ -28,15 +27,22 @@ Future<bool> copyText(BuildContext context, String text) async {
 }
 
 /// The invite link to room [code] that [client] is in: the website's join
-/// page, with every address to try (the host's local ones first). It opens
-/// the app at the room, or the host's web version in a browser.
+/// page, with every way in to try (the host's local addresses first, then
+/// the room through the meeting service, when it is there). It opens the
+/// app at the room, or the website at the room to play in the browser.
 String siteInvite(OnlineClient client, String code) {
   final host = client.host;
-  return siteInviteLink(code, host == null ? [client.url] : hostServers(host));
+  return siteInviteLink(
+    code,
+    host == null ? guestServers(client.url, code, peer: client.atMeetingService) : hostServers(host, code),
+    // The host's own web version, for browsers on its Wi-Fi.
+    web: host?.servesWeb ?? false,
+  );
 }
 
-/// Shows the invite link to room [code] to copy, rebuilt as the router
-/// setup goes on; for a room hosted here, with which ways in work.
+/// Shows the invite link to room [code] to copy, rebuilt as the ways in
+/// change (the meeting service, the router); for a room hosted here, with
+/// which ways in work.
 Future<void> showInvite(BuildContext context, OnlineClient client, String code) {
   final s = S.of(context);
   final host = client.host;
@@ -80,8 +86,11 @@ Future<void> showInvite(BuildContext context, OnlineClient client, String code) 
 }
 
 /// Which ways into a room hosted on this device work: the same Wi-Fi (when
-/// on a network) and the internet (once the router opened the port), with a
-/// "?" on how to open the router by hand and what can stand in the way.
+/// on a network) and the internet (the meeting service's status, with a
+/// short reason when not available), with a "?" on how playing from
+/// anywhere works and what can stand in the way. A room hosted in a browser
+/// tab has no way in on the same Wi-Fi of its own: that line is greyed out,
+/// and the "?" says to keep the tab open.
 class WaysIn extends StatelessWidget {
   const WaysIn({super.key, required this.host});
 
@@ -95,160 +104,66 @@ class WaysIn extends StatelessWidget {
       stream: host.changes,
       builder: (context, _) {
         final wifi = host.localAddresses.isNotEmpty;
+        final browser = host.inBrowser;
         final internet = host.internet;
-        // The public address typed in the lobby, while the router isn't open (nothing can check it).
-        final byHand = internet == InternetAccess.ready ? null : host.byHand;
-        final setByHand = byHand != null && internet != InternetAccess.checking;
-        Widget way(IconData icon, String text, Color color) => Row(
+        Widget way(IconData icon, String text, Color color, {bool greyed = false}) => Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 16, color: color),
             const SizedBox(width: 6),
-            Flexible(child: Text(text, style: theme.textTheme.bodySmall)),
+            Flexible(
+              child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: greyed ? color : null)),
+            ),
           ],
         );
-        const good = Color(0xFF81C784), bad = Color(0xFFFFCC80);
+        const good = Color(0xFF81C784), bad = Color(0xFFFFCC80), off = Colors.white38;
         final platform = defaultTargetPlatform;
         return Wrap(
           spacing: 16,
           runSpacing: 2,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            way(wifi ? Icons.wifi : Icons.wifi_off, s.sameWifi(wifi), wifi ? good : bad),
+            KeyedSubtree(
+              key: const ValueKey('same wifi'),
+              child: browser
+                  ? way(Icons.wifi_off, s.sameWifiAppOnly, off, greyed: true)
+                  : way(wifi ? Icons.wifi : Icons.wifi_off, s.sameWifi(wifi), wifi ? good : bad),
+            ),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
-                  child: setByHand
-                      ? way(Icons.public, s.internetByHand, Colors.white70)
-                      : way(
-                          switch (internet) {
-                            InternetAccess.checking => Icons.hourglass_empty,
-                            InternetAccess.ready => Icons.public,
-                            _ => Icons.public_off,
-                          },
-                          s.internetStatus(internet),
-                          switch (internet) {
-                            InternetAccess.checking => Colors.white54,
-                            InternetAccess.ready => good,
-                            _ => bad,
-                          },
-                        ),
+                  child: KeyedSubtree(
+                    key: const ValueKey('internet status'),
+                    child: way(
+                      switch (internet.phase) {
+                        PeerPhase.starting => Icons.hourglass_empty,
+                        PeerPhase.ready => Icons.public,
+                        PeerPhase.unavailable => Icons.public_off,
+                      },
+                      s.internetStatus(internet),
+                      switch (internet.phase) {
+                        PeerPhase.starting => Colors.white54,
+                        PeerPhase.ready => good,
+                        PeerPhase.unavailable => bad,
+                      },
+                    ),
+                  ),
                 ),
                 HelpButton(
                   key: const ValueKey('internet help'),
                   section: GlossarySection.online,
                   terms: const [GlossaryTerm.hosting],
                   intro: s.internetHelp(
-                    access: internet,
-                    // Once open, the port outside (the router may have picked another); else the one
-                    // to forward by hand.
-                    port: internet == InternetAccess.ready ? host.publicEndpoint?.port ?? host.port : host.port,
-                    address: host.localAddresses.firstOrNull,
-                    byHand: byHand == null ? null : '${byHand.address}:${byHand.port}',
-                    windows: platform == TargetPlatform.windows,
-                    phone: platform == TargetPlatform.android || platform == TargetPlatform.iOS,
+                    status: internet,
+                    windows: !browser && platform == TargetPlatform.windows,
+                    phone: !browser && (platform == TargetPlatform.android || platform == TargetPlatform.iOS),
+                    browser: browser,
                   ),
                 ),
               ],
             ),
           ],
-        );
-      },
-    );
-  }
-}
-
-/// For a room hosted on this device whose router isn't opened
-/// automatically (no UPnP, or an iPhone): the public address the host types
-/// (the router's, its port forwarded here by hand), kept for next time.
-/// Invites then carry it. Hidden once the router opened the port.
-class PublicAddressField extends StatefulWidget {
-  const PublicAddressField({super.key, required this.host});
-
-  final RoomHost host;
-
-  @override
-  State<PublicAddressField> createState() => _PublicAddressFieldState();
-}
-
-class _PublicAddressFieldState extends State<PublicAddressField> {
-  /// What Create Room set from the settings ("address", or "address:port"
-  /// when the port outside isn't this device's).
-  late final _text = TextEditingController(
-    text: switch (widget.host.byHand) {
-      null => '',
-      final b => b.port == widget.host.port ? b.address : '${b.address}:${b.port}',
-    },
-  );
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  /// Invites follow the box; an address (or an empty box) is saved.
-  void _changed(String text) {
-    final host = widget.host;
-    final address = parsePublicAddress(text, port: host.port);
-    host.byHand = address;
-    final value = text.trim();
-    final settings = AppSettings.of(context);
-    if ((address != null || value.isEmpty) && settings.publicAddress != value) {
-      settings.update((a) => a.publicAddress = value);
-    }
-    setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = S.of(context);
-    final host = widget.host;
-    return StreamBuilder<void>(
-      stream: host.changes,
-      builder: (context, _) {
-        if (host.internet == InternetAccess.ready) return const SizedBox.shrink();
-        final value = _text.text.trim();
-        return Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextField(
-                    key: const ValueKey('public address'),
-                    controller: _text,
-                    keyboardType: TextInputType.url,
-                    autocorrect: false,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      labelText: s.publicAddress,
-                      hintText: '203.0.113.7',
-                      prefixIcon: const Icon(Icons.public, size: 20),
-                      errorText: value.isEmpty || host.byHand != null ? null : s.notPublicAddress,
-                    ),
-                    onChanged: _changed,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: HelpButton(
-                    key: const ValueKey('public address help'),
-                    section: GlossarySection.online,
-                    terms: const [],
-                    intro: s.publicAddressHelp(
-                      port: host.port,
-                      address: host.localAddresses.firstOrNull,
-                      windows: defaultTargetPlatform == TargetPlatform.windows,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         );
       },
     );

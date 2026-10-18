@@ -11,8 +11,10 @@ import 'package:pokerfection/src/online/memory_link.dart';
 import 'package:pokerfection/src/online/mirror.dart';
 import 'package:pokerfection/src/online/online_client.dart';
 import 'package:pokerfection/src/online/protocol.dart';
+import 'package:pokerfection/src/online/seat_proof.dart';
 import 'package:pokerfection/src/online/seat_map.dart';
 import 'package:pokerfection/src/online/timing.dart';
+import 'package:pokerfection/src/server/client_link.dart';
 import 'package:pokerfection/src/server/room_registry.dart';
 
 import '../helpers.dart';
@@ -697,6 +699,113 @@ void main() {
     expect(await answer(JoinRoom(code: code, name: 'Ben', device: 'ben-phone'), 'ben'), refused);
     expect(await answer(JoinRoom(code: code, name: 'Ben', device: 'cy-phone'), 'cy'), isA<Welcome>());
   });
+
+  test("a connection that only pings and never asks for a room is dropped after 15 s (anyone who knows a room's "
+      'code can open connections to its host: they must not pile up); one in a room stays', () async {
+    final clock = ManualClock();
+    final registry = RoomRegistry(clock: clock, random: Random(5));
+    final (idleServer, idle) = MemoryLink.pair(address: 'idle');
+    final (hostServer, host) = MemoryLink.pair(address: 'host');
+    registry.accept(idleServer);
+    registry.accept(hostServer);
+    host.messages.listen((_) {});
+    idle.messages.listen((_) {});
+    host.send(const CreateRoom(name: 'Ann').encode());
+    for (var s = 0; s < 20; s++) {
+      idle.send(Ping(s).encode());
+      host.send(Ping(s).encode());
+      clock.advance(const Duration(seconds: 1));
+      await pumpEventQueue();
+    }
+    expect(idle.isClosed, isTrue);
+    expect(host.isClosed, isFalse);
+    expect(registry.connectionCount, 1);
+    expect(RoomRegistry.joinWait, const Duration(seconds: 15));
+  });
+
+  test('a player coming back over a direct connection proves the seat for that connection only: the proof gets '
+      "the seat there, and nowhere else (another connection's, or one that can't say which it is)", () async {
+    final clock = ManualClock();
+    final registry = RoomRegistry(clock: clock, random: Random(5));
+    Future<ServerMessage> answer(ClientMessage opening, ClientLink Function(MemoryLink server) wrap) async {
+      final (server, device) = MemoryLink.pair(address: 'guest');
+      registry.accept(wrap(server));
+      final answers = <ServerMessage>[];
+      device.messages.listen((text) => answers.add(ServerMessage.decode(text)));
+      device.send(opening.encode());
+      await pumpEventQueue();
+      return answers.first;
+    }
+
+    final (hostServer, host) = MemoryLink.pair(address: 'host');
+    registry.accept(hostServer);
+    final welcomes = <Welcome>[];
+    host.messages.listen((text) {
+      if (ServerMessage.decode(text) case final Welcome w) welcomes.add(w);
+    });
+    host.send(const CreateRoom(name: 'Ann').encode());
+    await pumpEventQueue();
+    final code = welcomes.single.code;
+    final ben = await answer(JoinRoom(code: code, name: 'Ben'), (s) => s) as Welcome;
+
+    final seatGone = isA<ServerError>().having((e) => e.code, 'code', JoinError.seatGone);
+    final proof = seatProof(ben.token, 'offer A|answer A');
+    expect(await answer(RejoinRoom.proved(code: code, proof: proof), (s) => _Bound(s, 'offer B|answer B')), seatGone);
+    expect(await answer(RejoinRoom.proved(code: code, proof: proof), (s) => s), seatGone);
+    expect(await answer(RejoinRoom.proved(code: code, proof: proof), (s) => _Bound(s, null)), seatGone);
+    final back = await answer(RejoinRoom.proved(code: code, proof: proof), (s) => _Bound(s, 'offer A|answer A'));
+    expect(back, isA<Welcome>().having((w) => w.seat, 'seat', ben.seat));
+  });
+
+  test("a room code is never all digits: older apps would read peer:23456 as a server called 'peer'", () {
+    // Draws every digit first, then letters.
+    final digitsFirst = _Draws([for (var i = 0; i < 5; i++) RoomRegistry.codeLetters.indexOf('2'), 0, 1, 2, 3, 4]);
+    expect(RoomRegistry.randomCode(digitsFirst), 'ABCDE');
+    final random = Random(1);
+    for (var i = 0; i < 20000; i++) {
+      expect(RoomRegistry.randomCode(random), isNot(matches(RegExp(r'^\d+$'))));
+    }
+  });
+}
+
+/// A server's side of a direct connection, that knows which it is
+/// ([binding]: both ends' certificates).
+class _Bound implements ClientLink, BoundConnection {
+  _Bound(this._link, this.binding);
+
+  final MemoryLink _link;
+
+  @override
+  final String? binding;
+
+  @override
+  String get address => _link.address;
+
+  @override
+  Stream<String> get messages => _link.messages;
+
+  @override
+  void send(String message) => _link.send(message);
+
+  @override
+  Future<void> close() => _link.close();
+}
+
+/// A Random that gives [draws] in turn (then zeros).
+class _Draws implements Random {
+  _Draws(this.draws);
+
+  final List<int> draws;
+  var _i = 0;
+
+  @override
+  int nextInt(int max) => _i < draws.length ? draws[_i++] : 0;
+
+  @override
+  bool nextBool() => false;
+
+  @override
+  double nextDouble() => 0;
 }
 
 /// The room seats of the players of a hand.

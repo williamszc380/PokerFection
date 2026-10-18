@@ -493,6 +493,12 @@ sealed class ClientMessage {
         name: m.name('name'),
         device: m.has('device') ? m.string('device') : null,
       ),
+      'rejoin' when m.has('proof') => RejoinRoom.proved(
+        version: m.integer('v'),
+        rules: m.integer('rules'),
+        code: m.string('code', maxLength: 16),
+        proof: m.string('proof', maxLength: 64),
+      ),
       'rejoin' => RejoinRoom(
         version: m.integer('v'),
         rules: m.integer('rules'),
@@ -600,21 +606,44 @@ class JoinRoom extends ClientMessage {
 /// closed), with the [token] the server gave: the seat is the player's
 /// again if they weren't away too long, and they get a [Snapshot] to catch
 /// up. Replaces any older connection of theirs.
+///
+/// Over a direct connection it carries a [proof] instead of the token (see
+/// seat_proof.dart): whoever answers there may not be the room's host, and
+/// must not learn the token.
 class RejoinRoom extends ClientMessage {
   const RejoinRoom({
     this.version = protocolVersion,
     this.rules = rulesVersion,
     required this.code,
     required this.token,
-  });
+  }) : proof = null;
+
+  /// The same, proving the seat with [proof] (seatProof of the token, for
+  /// this connection) rather than naming the token.
+  const RejoinRoom.proved({
+    this.version = protocolVersion,
+    this.rules = rulesVersion,
+    required this.code,
+    required String this.proof,
+  }) : token = '';
 
   final int version;
   final int rules;
   final String code;
+
+  /// The seat's token; empty when [proof] stands in for it.
   final String token;
+  final String? proof;
 
   @override
-  Map<String, Object?> toJson() => {'t': 'rejoin', 'v': version, 'rules': rules, 'code': code, 'token': token};
+  Map<String, Object?> toJson() => {
+    't': 'rejoin',
+    'v': version,
+    'rules': rules,
+    'code': code,
+    if (proof == null) 'token': token,
+    'proof': ?proof,
+  };
 }
 
 /// The device's copy of the hand stopped matching the server's: it asks
@@ -840,6 +869,7 @@ sealed class ServerMessage {
         seat: m.seat('s'),
         isHost: m.boolean('isHost'),
         waiting: m.boolean('waiting'),
+        peer: m.has('peer') && m.boolean('peer'),
       ),
       'room' => RoomState(
         code: m.string('code', maxLength: 16),
@@ -898,6 +928,7 @@ class Welcome extends ServerMessage {
     required this.seat,
     required this.isHost,
     this.waiting = false,
+    this.peer = false,
   });
 
   final String code;
@@ -908,6 +939,12 @@ class Welcome extends ServerMessage {
   /// Joined during the game: the seat is the player's from the next hand.
   final bool waiting;
 
+  /// The room can be reached through the meeting service (its code is the
+  /// host's name there, see peer_config.dart): a guest who came in another
+  /// way may go there to come back, and its invites may name it. False for
+  /// a room on a server of its own, or whose host holds no name there.
+  final bool peer;
+
   @override
   Map<String, Object?> toJson() => {
     't': 'welcome',
@@ -916,6 +953,7 @@ class Welcome extends ServerMessage {
     's': seat,
     'isHost': isHost,
     'waiting': waiting,
+    if (peer) 'peer': true,
   };
 }
 

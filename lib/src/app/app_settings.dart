@@ -98,11 +98,6 @@ class AppSettings extends ChangeNotifier {
   /// The game server to play online on; empty for the app's own.
   String serverUrl = '';
 
-  /// Hosting a room here: the router's public address, typed by hand (its
-  /// port forwarded by hand) when it can't be opened automatically; empty
-  /// if none. "203.0.113.7", or with the port outside: "203.0.113.7:47500".
-  String publicAddress = '';
-
   /// The online room this player is in, to come back to it if the app
   /// closes (or the page reloads) during the game. Changing it (see
   /// [remember]) only tells those who listen to it.
@@ -142,7 +137,6 @@ class AppSettings extends ChangeNotifier {
     cardFaces = pick(CardFaceStyle.values, saved['cardFaces'], cardFaces);
     if (saved['nickname'] case final String name) nickname = name;
     if (saved['serverUrl'] case final String url) serverUrl = url;
-    if (saved['publicAddress'] case final String address) publicAddress = address;
     if (saved['device'] case final String key) _device = key;
     rejoin.value = RejoinRecord.fromJson(saved['rejoin']);
     // Settings saved before there were three styles.
@@ -180,7 +174,6 @@ class AppSettings extends ChangeNotifier {
       'felt': felt.name,
       'nickname': nickname,
       'serverUrl': serverUrl,
-      'publicAddress': publicAddress,
       if (_device.isNotEmpty) 'device': _device,
       'rejoin': ?rejoin.value?.toJson(),
     });

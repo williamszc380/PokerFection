@@ -6,7 +6,7 @@ import '../gto/preflop/preflop_charts.dart';
 import '../gto/hand_read.dart';
 import '../gto/spot_strategy.dart';
 import '../online/protocol.dart' show CloseReason, JoinError;
-import '../online/room_host.dart' show InternetAccess;
+import '../online/peer_status.dart' show PeerPhase, PeerStatus, PeerTrouble;
 import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
 import 'strings.dart';
 
@@ -403,73 +403,54 @@ class StringsEs extends S {
   @override
   String get cantStartRoom => 'No se puede abrir una sala en este dispositivo.';
   @override
-  String get cantHostInBrowser => 'Las salas se crean en la app (Windows, Android, iPhone). Aquí puedes unirte a una.';
+  String get cantHostInBrowser => 'Este navegador no puede alojar una sala. Únete a una aquí, o alójala en la app.';
   @override
-  String get websiteCantJoin =>
-      'Este sitio web no puede llegar a una sala en el dispositivo de otra persona: abre la dirección para navegador de la invitación.';
+  String get roomNotNearby => 'No se encuentra la sala: revisa el código y tu internet.';
   @override
-  String get roomNotNearby => 'No hay ninguna sala con ese código en esta red: pide la invitación al anfitrión.';
+  String get noDirectRoute => 'No se puede conectar directamente con el anfitrión desde esta red. Prueba otra red '
+      '(Wi-Fi en vez de datos móviles) o juega en la misma Wi-Fi.';
+  @override
+  String get cantReachServer => 'No se puede llegar al servidor';
+  @override
+  String get wsOnWebsite => 'Este sitio web no puede usar un servidor ws://. Usa wss://, o borra el servidor.';
   @override
   String sameWifi(bool yes) => yes ? 'Misma Wi-Fi: sí' : 'Misma Wi-Fi: sin red';
   @override
-  String internetStatus(InternetAccess access) => switch (access) {
-        InternetAccess.checking => 'Internet: comprobando…',
-        InternetAccess.ready => 'Internet: lista',
-        _ => 'Internet: no disponible',
+  String get sameWifiAppOnly => 'Misma Wi-Fi: solo en la app';
+  @override
+  String internetStatus(PeerStatus status) => switch (status.phase) {
+        PeerPhase.starting => 'Internet: conectando…',
+        PeerPhase.ready => 'Internet: lista',
+        PeerPhase.unavailable => switch (status.trouble) {
+            PeerTrouble.codeTaken => 'Internet: no disponible (ocupado: crea otra sala)',
+            PeerTrouble.unsupported => 'Internet: no disponible en este dispositivo',
+            _ => 'Internet: no disponible (sin conexión)',
+          },
       };
   @override
-  String get internetByHand => 'Internet: puesta a mano';
-  @override
-  String internetHelp({
-    required InternetAccess access,
-    required int port,
-    String? address,
-    String? byHand,
-    required bool windows,
-    required bool phone,
-  }) =>
-      [
-        switch (access) {
-          InternetAccess.checking => 'La app le está pidiendo a tu router que deje entrar a amigos desde internet.',
-          InternetAccess.ready => 'Tu router abrió el puerto $port: tus amigos en internet pueden unirse con la '
-              'invitación.',
-          InternetAccess.noRouter => 'Ningún router respondió a la configuración automática (UPnP está apagado o el '
-              'router no lo tiene).',
-          InternetAccess.refused => 'Tu router no quiso abrir el puerto.',
-          InternetAccess.notPublic => 'Tu router no tiene una dirección pública propia: tu proveedor de internet la '
-              'comparte (CGNAT) o hay otro router delante.',
-          InternetAccess.byHand => 'En iPhone y iPad la app no puede configurar el router.',
-        },
-        if (access != InternetAccess.ready)
-          'Para abrirlo a mano: en la configuración del router, redirige el puerto TCP $port a '
-              '${address ?? 'este dispositivo'}. Luego escribe la IP pública del router en Dirección pública, en la '
-              'sala: las invitaciones la llevan.',
-        if (byHand != null)
-          'Puesta a mano: las invitaciones llevan $byHand. La app no puede comprobarla: pide a un amigo de fuera '
-              'que abra http://$byHand/health.',
-        'En la misma Wi-Fi siempre funciona.',
-        if (windows) 'La primera vez, el Firewall de Windows pregunta si PokerFection puede usar la red: permítelo.',
-        'Algunos proveedores de internet (direcciones compartidas, CGNAT) y los datos móviles hacen imposible jugar por '
-            'internet sin un servidor externo.',
+  String internetHelp({required PeerStatus status, required bool windows, required bool phone, bool browser = false}) => [
+        if (status.phase == PeerPhase.unavailable)
+          switch (status.trouble) {
+            PeerTrouble.codeTaken => 'El servicio de encuentro no pudo dar un nombre a esta sala. Crea otra sala '
+                'para los amigos de fuera.',
+            PeerTrouble.unsupported => 'Esta versión de la app no puede conectarse por internet.',
+            _ => 'No se puede llegar al servicio de encuentro (¿sin internet?). La app lo sigue intentando.',
+          },
+        'Tus amigos pueden unirse desde cualquier sitio con el código o la invitación.',
+        'Un servicio público y gratuito de encuentro presenta los dispositivos. Después se juega de dispositivo a '
+            'dispositivo, cifrado.',
+        if (browser)
+          'Algunas redes (a menudo los datos móviles) no pueden conectarse directamente. La misma Wi-Fi sin internet '
+              'solo funciona si la sala se aloja en la app.'
+        else
+          'Algunas redes (a menudo los datos móviles) no pueden conectarse directamente. En la misma Wi-Fi siempre '
+              'funciona, incluso sin internet.',
+        if (browser) 'Mantén esta pestaña abierta mientras alojas: la sala se cierra con la pestaña.',
+        if (windows)
+          'La primera vez, el Firewall de Windows pregunta si PokerFection puede usar la red: permítelo.',
         if (phone)
-          'Mantén la app abierta en pantalla mientras eres anfitrión: la sala se detiene si la app se cierra o pasa a '
-              'segundo plano. Con datos móviles, los amigos en internet casi nunca pueden unirse.',
-      ].join('\n\n');
-  @override
-  String get publicAddress => 'Dirección pública';
-  @override
-  String get notPublicAddress => 'Escribe tu IP pública, como 203.0.113.7';
-  @override
-  String publicAddressHelp({required int port, String? address, required bool windows}) => [
-        'Para un router que no abre el puerto solo (UPnP apagado). Ábrelo a mano una vez: en la página de '
-            'configuración o la app del router, busca Redirección de puertos y redirige el puerto TCP $port a '
-            '${windows ? 'esta computadora' : 'este dispositivo'}${address == null ? '' : ', $address'}.',
-        'Luego escribe aquí tu IP pública. La app o la página de estado del router la muestra (dirección IP WAN o '
-            'de Internet), o busca "cuál es mi IP". Si el router lleva otro puerto de fuera al $port, añádelo: '
-            '203.0.113.7:47500.',
-        'Entonces las invitaciones la llevan, y el enlace para navegador también. La app no puede comprobarla: '
-            'pide a un amigo de fuera que abra http://<IP pública>:$port/health. Casi todas las IP públicas cambian '
-            'de vez en cuando: revísala antes de jugar.',
+          'Mantén la app abierta en pantalla mientras alojas: la sala se detiene si la app se cierra o pasa a segundo '
+              'plano.',
       ].join('\n\n');
   @override
   String get connecting => 'Conectando…';
@@ -484,14 +465,14 @@ class StringsEs extends S {
         JoinError.roomGone => 'La sala se cerró',
         JoinError.seatGone => 'Estuviste fuera demasiado: vuelve a unirte',
         JoinError.removed => 'El anfitrión te expulsó de la sala',
-        null => 'No se puede conectar al servidor',
+        null => 'No se puede llegar a la sala',
       };
   @override
   String room(String code) => 'Sala $code';
   @override
   String get copied => 'Copiado';
   @override
-  String get shareCode => 'En la misma Wi-Fi basta el código; a los demás mándales la invitación.';
+  String get shareCode => 'Tus amigos se unen con este código o la invitación.';
   @override
   String get host => 'Anfitrión';
   @override
@@ -874,11 +855,12 @@ class StringsEs extends S {
             '☰ > Editar mesa, y luego Expulsar. Se va enseguida (si está en una mano, cuando termine) y no puede volver '
             'a unirse a la sala. Si el anfitrión se va, la sala se cierra.',
         GlossaryTerm.hosting => 'Crear sala abre la sala en tu dispositivo: se juega a través de la app del anfitrión, '
-            'sin servidor externo. Los amigos en la misma Wi-Fi se unen con el código o la invitación; los de fuera, con '
-            'la invitación cuando tu router los deja entrar (la app intenta configurarlo: mira Internet en la sala). '
-            'Quien no tiene la app abre en el navegador la dirección de la invitación (si la app trae la versión web). '
-            'La sala termina cuando el anfitrión se va o cierra la app. La versión del navegador no puede alojar una '
-            'sala, solo unirse.',
+            'sin servidor de juego nuestro. Los amigos se unen con el código o la invitación: en la misma Wi-Fi, incluso '
+            'sin internet; desde cualquier otro sitio, un servicio público y gratuito de encuentro presenta los '
+            'dispositivos y después se juega de dispositivo a dispositivo, cifrado (algunas redes, a menudo los datos '
+            'móviles, no pueden conectarse directamente). Quien no tiene la app juega en el navegador desde la '
+            'invitación. La sala termina cuando el anfitrión se va o cierra la app. También se puede alojar en un '
+            'navegador: entonces todos se unen por internet, y la sala se cierra con la pestaña.',
         GlossaryTerm.onlineBots => 'Una sala nueva solo tiene al anfitrión: los demás asientos están libres. Los amigos '
             'que se unen toman un asiento libre, y el anfitrión puede añadir bots (cada uno con su estilo) o quitarlos. '
             'Cada mano se reparte a los asientos ocupados, así que hacen falta al menos 2 jugadores; con menos, la '

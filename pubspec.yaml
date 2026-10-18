@@ -39,6 +39,14 @@ dependencies:
     sdk: flutter
   ffi: ^2.2.0
   web: ^1.1.1
+  # Direct connections between players' devices over the internet (WebRTC
+  # data channels only): Google's WebRTC in the apps, the browser's on the
+  # web. See lib/src/online/rtc_flutter.dart.
+  flutter_webrtc: ^1.6.2+hotfix.4
+  # HMAC-SHA256 (pure Dart, so the standalone server can use it too): a
+  # player coming back over a direct connection proves their seat without
+  # handing its token to whoever answers. See lib/src/online/seat_proof.dart.
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:
@@ -50,6 +58,9 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  # Tests that run in the real app (integration_test/), with its plugins.
+  integration_test:
+    sdk: flutter
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

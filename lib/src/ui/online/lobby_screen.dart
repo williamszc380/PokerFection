@@ -22,8 +22,8 @@ import 'room_widgets.dart';
 /// host changes them).
 ///
 /// For a room hosted on this device, the host also sees which ways in work:
-/// the same Wi-Fi, and the internet (once the router opened the port, or at
-/// the public address the host types when it can't be opened automatically).
+/// the same Wi-Fi, and the internet (friends anywhere connect straight to
+/// this device, once the meeting service has the room's code).
 ///
 /// When a game is over, everyone is back here (the same seats, bots and
 /// rules) until the host starts a new one. A player out of chips can open
@@ -181,7 +181,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
       children: [
         Text(
           _client.status == OnlineStatus.lost
-              ? s.connectionLost
+              // Lost because this network can't reach the host directly: what to try instead.
+              ? (_client.noDirectRoute ? s.noDirectRoute : s.connectionLost)
               : switch (_client.failure) {
                   final JoinError failure => s.joinError(failure),
                   null => s.closed(_client.closeReason),
@@ -247,8 +248,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
                   if (_client.host case final host?) ...[
                     const SizedBox(height: 8),
                     WaysIn(host: host),
-                    // For a router that isn't opened automatically: the address set by hand.
-                    PublicAddressField(host: host),
                   ],
                 ],
               ),

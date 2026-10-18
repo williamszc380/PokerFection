@@ -1,15 +1,18 @@
 // Checks hosting on this computer, the way Create Room does it: starts the
-// game server inside this process, says which addresses it has and how the
-// router setup went, creates a room from 127.0.0.1, then joins it as
-// friends would: at 127.0.0.1, at each local network address of the invite,
-// by the room code alone (found on the network), and at the public address
-// when the router opened the port. Then deals a hand to everyone, checks the
-// browser version is served, and closes the room as the host.
+// game server inside this process, says which addresses it has, whether
+// the meeting service took the room's code, and how the silent router setup
+// went; creates a room from 127.0.0.1, then joins it as friends would: at
+// 127.0.0.1, at each local network address of the invite, by the room code
+// alone (found on the network), and at the public address when the router
+// opened the port. Then deals a hand to everyone, checks the browser
+// version is served, and closes the room as the host.
 //
 //   dart run tool/host_check.dart [--no-router]
 //
-// --no-router leaves the router alone (no port opened with UPnP): the
-// public address is then checked as if typed by hand, in the invite only.
+// --no-router leaves the router alone (no port opened with UPnP).
+// Run with plain Dart, it can't make direct connections (they need Flutter's
+// WebRTC): the meeting service's status then says so, and the invite names
+// no room there; integration_test/peer_live_test.dart checks those.
 // The first run may make Windows Firewall ask about dart.exe (connections
 // from this computer to itself work either way).
 import 'dart:async';
@@ -73,13 +76,16 @@ Future<void> main(List<String> args) async {
   stdout.writeln('     Local addresses: ${host.localAddresses.isEmpty ? 'none' : host.localAddresses.join(', ')}');
   stdout.writeln('     Web version served: ${host.servesWeb}');
 
+  stdout.writeln('     Internet (meeting service): ${host.internet}');
   // The router setup runs in the background: a few seconds.
-  final setupEnd = DateTime.now().add(const Duration(seconds: 15));
-  while (host.internet == InternetAccess.checking && DateTime.now().isBefore(setupEnd)) {
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-  }
-  stdout.writeln('     Router setup: ${openRouter ? host.internet.name : 'left alone (--no-router)'}'
-      '${host.publicEndpoint == null ? '' : ' (public ${host.publicEndpoint!.address}:${host.publicEndpoint!.port})'}');
+  await host.routerSetup.timeout(const Duration(seconds: 15), onTimeout: () {});
+  final public = host.routerEndpoint;
+  final router = switch (public) {
+    _ when !openRouter => 'left alone (--no-router)',
+    null => 'no port opened (direct connections and the same Wi-Fi need none)',
+    final p => 'open (public ${p.address}:${p.port}, a second way in)',
+  };
+  stdout.writeln('     Router setup: $router');
 
   final hostClient = OnlineClient(host.ownServer, host: host);
   final Welcome welcome;
@@ -94,7 +100,7 @@ Future<void> main(List<String> args) async {
   final hostPlayer = _Player('Host', hostClient);
   _report(welcome.isHost, 'Room $code created at ${host.ownServer}');
 
-  final servers = hostServers(host);
+  final servers = hostServers(host, code);
   final link = inviteLink(code, servers);
   stdout.writeln('     Invite link: $link');
   final invite = parseInvite(link)!;
@@ -112,7 +118,7 @@ Future<void> main(List<String> args) async {
   if (nearby.isNotEmpty) {
     if (await _join('ByCode', code, nearby) case final p?) players.add(p);
   }
-  if (host.publicEndpoint case final public?) {
+  if (public != null) {
     // Many routers don't lead their own public address back inside (no
     // "hairpin"): failing here doesn't mean friends outside can't come in.
     final client = OnlineClient('ws://${public.address}:${public.port}/ws');
@@ -123,17 +129,6 @@ Future<void> main(List<String> args) async {
     } on OnlineFailure {
       stdout.writeln('     The public address does not lead back from inside (common; ask a friend to try)');
     }
-  }
-
-  // Without the router opened, a public address typed by hand goes last in the invite (nothing can check it).
-  if (host.internet != InternetAccess.ready) {
-    host.byHand = parsePublicAddress('203.0.113.7', port: host.port);
-    final typed = parseInvite(inviteLink(code, hostServers(host)))!.servers;
-    _report(
-      typed.length == servers.length + 1 && typed.last == 'ws://203.0.113.7:${host.port}/ws',
-      'A public address set by hand ends the invite: ${typed.last}',
-    );
-    host.byHand = null;
   }
 
   // A wrong code is refused; a full table too.

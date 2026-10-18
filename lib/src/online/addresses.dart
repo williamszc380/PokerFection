@@ -1,6 +1,7 @@
 /// IPv4 addresses: which are a local network's, and which others can reach
-/// from the internet. Plain Dart, for the router setup (server/upnp.dart)
-/// and for the public address a host types by hand (any platform).
+/// from the internet. Plain Dart, for this device's local addresses
+/// (host_here_io.dart) and the router setup (server/upnp.dart), which must
+/// tell a router's real public address from a shared one.
 library;
 
 /// Whether [address] is an IPv4 address of a local network (10/8,

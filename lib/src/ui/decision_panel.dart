@@ -1816,7 +1816,8 @@ class DecisionPanelState extends State<DecisionPanel> {
       children: [
         Text(
           online.connectionLost
-              ? s.connectionLost
+              // Lost because this network can't reach the host directly: what to try instead.
+              ? (online.client.noDirectRoute ? s.noDirectRoute : s.connectionLost)
               : switch (online.client.failure) {
                   final JoinError failure => s.joinError(failure),
                   null => s.closed(online.client.closeReason),

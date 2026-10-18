@@ -38,24 +38,39 @@ the drills; ☰ > Saved Spots lists every spot with its next review.
 
 ## Playing online
 
-Online play (main menu: **Play > Multiplayer**) needs no outside service:
-**Create Room** runs the game server inside the app of whoever creates the
-room (Windows, Android or iOS), on port 47474 (or one of the next few when it
-is taken), and the host's app joins it like everyone else. The room ends when
-the host leaves.
+Online play (main menu: **Play > Multiplayer**) needs no game server of our
+own: **Create Room** runs the game server inside the app of whoever creates
+the room (Windows, Android or iOS), on port 47474 (or one of the next few when
+it is taken), and the host's app joins it like everyone else. The room ends
+when the host leaves.
 
 - **Same Wi-Fi:** friends join with the room code alone (the app finds the
-  room on the network), or with the invite.
-- **Internet:** the app asks the router to open the port (UPnP). The lobby
-  shows "Internet: ready" when that worked; its "?" explains opening the port
-  by hand. Some providers (shared addresses, CGNAT) and mobile data make it
-  impossible. iPhones and iPads skip the automatic setup.
-- **Invite:** a link that opens the app with every address of the host to
-  try (local first); a host that serves the web version also has a browser
-  link to copy.
-- **Browser players** open `http://<host address>:47474/?code=ABCDE`: the
-  host's app serves the web version there. The website can't reach a home
-  server (browsers block it from https pages), and a browser can't host.
+  room on the network), or with the invite. Works without internet.
+- **From anywhere:** the same code or invite. The host takes the room's code
+  as its name at a free public meeting service (PeerJS's server; public
+  Google and Cloudflare STUN), which only introduces the devices; the game
+  then goes device to device over an encrypted WebRTC data channel
+  (flutter_webrtc). The lobby shows "Internet: connecting… / ready / not
+  available" with a short reason. There is no relay: when two networks
+  can't connect directly (often mobile data), the guest is told to try
+  another network or the same Wi-Fi. If the router lets the app open the
+  port by itself (UPnP), it does so silently, and invites carry that public
+  address too, as a second way in.
+- **Invite:** a link that opens the app with every way in to try: the
+  host's local addresses, then `peer:CODE` (the room through the meeting
+  service), then the router's public address when open.
+- **Browser players** press **Play in this browser** on the invite's page:
+  the website opens at the room (`?code=ABCDE&server=peer:ABCDE`) and
+  connects straight to the host through the meeting service (WebRTC works
+  from the https site). When the host's app serves the browser version
+  (Windows), the page also links to the host's own copy at
+  `http://<host address>:47474/` for the same Wi-Fi (no internet needed);
+  an invite from an older app (no `peer:` entry) links only there.
+- **Hosting in a browser:** Create Room works on the website too (when the
+  browser has WebRTC): the room runs in the tab (the same room code, in
+  plain Dart), the page's own player joins it in memory, and everyone
+  comes in through the meeting service. The lobby's ? says to keep the tab
+  open; closing it asks first, then tells everyone the room closed.
 - **Dropped connections:** a player's seat is kept for 2 minutes. Their app
   reconnects by itself and catches up with the hand (a snapshot from the
   server); after the app was closed (or a browser page reloaded), Play >
@@ -85,10 +100,10 @@ the host leaves.
   device, where the play is still scored; not in Advanced training).
 
 [docs/online_server.md](docs/online_server.md) is the step-by-step guide to
-hosting and inviting friends: the firewall prompt, router setup (automatic
-and by hand), CGNAT and mobile data, hosting from a phone, browser friends,
-what to do when something goes wrong, and running the server on your own
-computer.
+hosting and inviting friends: the firewall prompt, joining from anywhere,
+what the public helpers see, when a direct connection isn't possible,
+hosting from a phone, browser friends, what to do when something goes wrong,
+and running the server on your own computer.
 
 To ship the web version with the Windows app, build it once with
 `dart run tool/build_web.dart --host` (into `build/web_host`, with the
@@ -98,8 +113,10 @@ as `data/web`. Without it, hosting still works for players with the app.
 `dart run tool/host_check.dart` checks hosting on this computer: it starts a
 room the way Create Room does, joins it at every address, reports the router
 setup, and closes it. With `--no-router` it leaves the router alone (no port
-opened). The first time, Windows Firewall asks whether the app may use the
-network.
+opened). Run with plain Dart, it can't make direct connections;
+`flutter test integration_test/peer_live_test.dart -d windows
+--dart-define=PEER_LIVE=1` checks those through the real public helpers. The
+first time, Windows Firewall asks whether the app may use the network.
 
 `dart run bin/server.dart` runs the same server on its own, on your own
 computer; players then enter `ws://<its address>:47474/ws` as the Server in

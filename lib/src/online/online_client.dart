@@ -2,10 +2,14 @@ import 'dart:async';
 import 'dart:math';
 
 import 'clock.dart';
+import 'connect.dart';
 import 'online_socket.dart';
+import 'peer_config.dart';
+import 'peer_socket.dart' show PeerConnector;
 import 'protocol.dart';
 import 'room_host.dart';
-import 'socket.dart';
+import 'rtc.dart' show NoDirectRoute;
+import 'seat_proof.dart';
 import 'timing.dart';
 
 /// Where the connection is at.
@@ -26,25 +30,45 @@ enum OnlineStatus {
 }
 
 /// Creating or joining a room failed: the server said why ([error]), or it
-/// couldn't be reached (null; [refused] when nothing listens there).
+/// couldn't be reached (null; [refused] when nothing listens there,
+/// [noDirectRoute] when the host answered through the meeting service but
+/// the two devices' networks won't let them connect directly).
 class OnlineFailure implements Exception {
-  const OnlineFailure([this.error]) : refused = false;
-  const OnlineFailure.refused() : error = null, refused = true;
+  const OnlineFailure([this.error]) : refused = false, noDirectRoute = false;
+  const OnlineFailure.refused() : error = null, refused = true, noDirectRoute = false;
+  const OnlineFailure.noDirectRoute() : error = null, refused = false, noDirectRoute = true;
 
   final JoinError? error;
   final bool refused;
 
+  /// The room is there, but this device can't reach its host from the
+  /// network it is on (often mobile data): another network may work, the
+  /// same Wi-Fi always does. Its own message, not "can't connect".
+  final bool noDirectRoute;
+
   @override
-  String toString() => 'OnlineFailure(${error?.name ?? "can't connect"})';
+  String toString() => 'OnlineFailure(${error?.name ?? (noDirectRoute ? 'no direct route' : "can't connect")})';
 }
 
 /// What a device needs to come back to a room after the app was closed
 /// (or the page reloaded): where, which room, and the token that proves
 /// who the player is. Kept with the settings while the player is in a room.
 class RejoinRecord {
-  const RejoinRecord({required this.server, required this.code, required this.token, required this.savedAt});
+  const RejoinRecord({
+    required this.server,
+    this.alsoTry = const [],
+    required this.code,
+    required this.token,
+    required this.savedAt,
+  });
 
+  /// Where the room was last reached.
   final String server;
+
+  /// Other ways to the room when [server] can't be reached: the room
+  /// through the meeting service, for a guest who came in on the host's
+  /// Wi-Fi and is elsewhere now.
+  final List<String> alsoTry;
   final String code;
   final String token;
 
@@ -56,11 +80,27 @@ class RejoinRecord {
   /// after the connection drops (this is a guess; the server says).
   bool get fresh => DateTime.now().millisecondsSinceEpoch - savedAt < const Duration(minutes: 10).inMilliseconds;
 
-  Map<String, Object?> toJson() => {'server': server, 'code': code, 'token': token, 'savedAt': savedAt};
+  Map<String, Object?> toJson() => {
+    'server': server,
+    if (alsoTry.isNotEmpty) 'alsoTry': alsoTry,
+    'code': code,
+    'token': token,
+    'savedAt': savedAt,
+  };
 
   static RejoinRecord? fromJson(Object? json) => switch (json) {
     {'server': final String server, 'code': final String code, 'token': final String token, 'savedAt': final num at} =>
-      RejoinRecord(server: server, code: code, token: token, savedAt: at.toInt()),
+      RejoinRecord(
+        server: server,
+        alsoTry: [
+          if (json['alsoTry'] case final List<Object?> more)
+            for (final s in more)
+              if (s is String) s,
+        ],
+        code: code,
+        token: token,
+        savedAt: at.toInt(),
+      ),
     _ => null,
   };
 }
@@ -76,9 +116,20 @@ class RejoinRecord {
 /// When the connection drops, it comes back by itself ([reconnecting]):
 /// it tries again and again, less often as time goes on, and the server
 /// gives the seat back with the token it gave ([Welcome]), then a snapshot
-/// to catch up with. It gives up when the server can't have kept the seat
-/// any longer, or at once when nobody listens at the address any more (the
-/// host's app has stopped: the room is gone).
+/// to catch up with. Each try goes to the address that had the room, then
+/// the other ways back: where the room was first reached and, when it can
+/// be reached through the meeting service ([Welcome.peer]), there. So a
+/// phone that left the host's Wi-Fi gets back in over mobile data. It
+/// gives up when the server can't have kept the seat any longer
+/// ([noDirectRoute] says when the last tries found the host but couldn't
+/// connect to it), or at once when nobody listens at the address any more
+/// (the host's app has stopped: the room is gone; reached through the
+/// meeting service, once the room has been missing there for
+/// [peerRefusalSpan]).
+///
+/// Over a direct connection, a seat is proven without naming its token
+/// (RejoinRoom.proved): whoever holds the room's name at the meeting
+/// service may not be its host.
 ///
 /// Messages are read in order and kept until someone takes them ([attach]),
 /// so none are lost while the screens change from the lobby to the table.
@@ -94,11 +145,11 @@ class OnlineClient {
     List<String> alsoTry = const [],
     this.host,
     this.onRecord,
-    Future<OnlineSocket> Function(String url)? connect,
+    this._connect,
+    this._peer,
     Clock? clock,
     Random? random,
   }) : _servers = {url, ...alsoTry}.toList(),
-       _connect = connect ?? connectSocket,
        _clock = clock ?? SystemClock(),
        _random = random ?? Random();
 
@@ -115,7 +166,11 @@ class OnlineClient {
   /// room ends with the host's app.
   final void Function(RejoinRecord? record)? onRecord;
 
-  final Future<OnlineSocket> Function(String url) _connect;
+  /// Opens a connection to a server (tests); when not given, connectAny,
+  /// through [_peer] when given (tests), with the seat's token when coming
+  /// back to a seat (for the pass that goes with an offer).
+  final Future<OnlineSocket> Function(String url)? _connect;
+  final PeerConnector? _peer;
   final Clock _clock;
   final Random _random;
 
@@ -133,6 +188,21 @@ class OnlineClient {
 
   /// Why the server wouldn't let this player back in, if it didn't.
   JoinError? failure;
+
+  /// The connection was [OnlineStatus.lost] because this network can't
+  /// reach the host directly: the last tries found the host through the
+  /// meeting service, but no way between the devices (another network may
+  /// work, the same Wi-Fi does).
+  bool noDirectRoute = false;
+
+  /// The token of the seat being come back to (while rejoining or
+  /// reconnecting), for the pass that goes with an offer through the
+  /// meeting service.
+  String? _seat;
+
+  /// Where the room was first reached: a way back too, when a later
+  /// address stops working.
+  String? _home;
 
   final StreamController<void> _changes = StreamController.broadcast();
   Stream<void> get changes => _changes.stream;
@@ -157,10 +227,17 @@ class OnlineClient {
   Timer? _pingTimer;
 
   /// Getting the connection back: since when, tries so far, and how many
-  /// found nobody listening, in a row.
+  /// found nobody listening, in a row (since when).
   int _droppedAt = 0;
   int _tries = 0;
   int _refusals = 0;
+  int _refusedSince = 0;
+
+  /// Nobody holding a room's name at the meeting service (a [peerEntry])
+  /// may only mean its host's connection to the service is being made
+  /// again (which takes up to half a minute, see PeerSignaling.backoff):
+  /// such a room counts as closed only once it has been missing this long.
+  static const peerRefusalSpan = Duration(seconds: 45);
   bool _trying = false;
   Timer? _retry;
 
@@ -175,16 +252,27 @@ class OnlineClient {
   /// Connects and sends [opening] (a [CreateRoom], [JoinRoom] or
   /// [RejoinRoom]), trying each server in turn while they can't be reached
   /// or don't have the room. Completes with the server's welcome; throws an
-  /// [OnlineFailure] (room not found if any server said so).
+  /// [OnlineFailure]: no direct route if the host answered through the
+  /// meeting service but couldn't be reached (the room is there: that says
+  /// the most), else room not found if any server said so (or nobody held
+  /// the room's name at the meeting service), else can't connect.
   Future<Welcome> open(ClientMessage opening) async {
+    if (opening is RejoinRoom && opening.proof == null) _seat = opening.token;
     var failure = const OnlineFailure();
     for (final server in _servers) {
       try {
         return await _openAt(server, opening);
       } on OnlineFailure catch (e) {
-        if (e.error != null) failure = e;
+        if (e.noDirectRoute) {
+          failure = e;
+        } else if (!failure.noDirectRoute && (e.error != null || (e.refused && isPeerEntry(server)))) {
+          failure = e.error != null ? e : const OnlineFailure(JoinError.roomNotFound);
+        }
         // Any other answer is the room's own: no use trying elsewhere.
-        if (e.error != null && e.error != JoinError.roomNotFound) break;
+        if (e.error != null && e.error != JoinError.roomNotFound) {
+          failure = e;
+          break;
+        }
       }
     }
     status = OnlineStatus.closed;
@@ -195,13 +283,21 @@ class OnlineClient {
   /// While [reconnecting], the status stays so until the welcome comes.
   Future<Welcome> _openAt(String server, ClientMessage opening) async {
     final OnlineSocket socket;
+    Future<OnlineSocket>? connecting;
     try {
-      // On the local network a server answers at once.
-      final local = RegExp(r'^wss?://(10|127|192\.168|172\.(1[6-9]|2\d|3[01]))\.').hasMatch(server);
-      socket = await _connect(server).timeout(Duration(seconds: local ? 3 : 6));
+      // Some ways in fail before there is a Future (a browser's WebSocket
+      // refuses a ws:// address from the https site, or a badly typed one
+      // at once): that is a failure like any other, and the next is tried.
+      connecting = Future.sync(() => _connectTo(server));
+      socket = await connecting.timeout(connectTimeout(server));
     } on ConnectionRefused {
       throw const OnlineFailure.refused();
+    } on NoDirectRoute {
+      throw const OnlineFailure.noDirectRoute();
     } catch (_) {
+      // A connection that comes after all is nobody's: closed, or it would
+      // keep its ports (a direct connection's, several) open for nothing.
+      unawaited(connecting?.then((orphan) => orphan.close(), onError: (Object _) {}));
       throw const OnlineFailure();
     }
     url = server;
@@ -218,7 +314,13 @@ class OnlineClient {
         if (_socket == socket) _onDone();
       },
     );
-    socket.send(opening.encode());
+    final (sealed, unsafe) = _sealed(opening, socket);
+    if (unsafe != null) {
+      if (_socket == socket) _socket = null;
+      unawaited(socket.close());
+      throw unsafe;
+    }
+    socket.send(sealed.encode());
     _schedulePing();
     try {
       return await opened.future.timeout(const Duration(seconds: 10));
@@ -228,6 +330,29 @@ class OnlineClient {
       unawaited(socket.close());
       throw e is OnlineFailure ? e : const OnlineFailure();
     }
+  }
+
+  /// Opens a connection to [server]: the host's own app's in memory when
+  /// its room runs inside the app ([RoomHost.connectOwn], a browser
+  /// hosting), else as [_connect] does.
+  Future<OnlineSocket> _connectTo(String server) {
+    final host = this.host;
+    if (host != null && server == host.ownServer) {
+      if (host.connectOwn() case final own?) return Future.value(own);
+    }
+    return _connect?.call(server) ?? connectAny(server, peer: _peer, seat: _seat);
+  }
+
+  /// [opening] as it may go on [socket]: over a direct connection, a
+  /// rejoin proves the seat for that connection rather than naming its
+  /// token (whoever answered may not be the room's host). A direct
+  /// connection that can't say which it is gets no token at all: then the
+  /// failure to throw instead.
+  (ClientMessage, OnlineFailure?) _sealed(ClientMessage opening, OnlineSocket socket) {
+    if (opening is! RejoinRoom || opening.proof != null || socket is! BoundConnection) return (opening, null);
+    final binding = (socket as BoundConnection).binding;
+    if (binding == null) return (opening, const OnlineFailure());
+    return (RejoinRoom.proved(code: opening.code, proof: seatProof(opening.token, binding)), null);
   }
 
   /// Sends [message], while connected (while reconnecting it is lost: the
@@ -290,8 +415,10 @@ class OnlineClient {
   }
 
   /// Tries to reconnect right away (the app is back on screen), rather
-  /// than at the next try.
+  /// than at the next try. A host also checks its way in from the internet
+  /// (its connection to the meeting service may have died meanwhile).
   void reconnectNow() {
+    host?.checkInternet();
     if (status != OnlineStatus.reconnecting || _trying) return;
     _retry?.cancel();
     unawaited(_reconnect());
@@ -315,6 +442,7 @@ class OnlineClient {
         if (opening != null && !opening.isCompleted) opening.complete(message);
       case Welcome():
         welcome = message;
+        _home ??= url;
         status = OnlineStatus.open;
         _opening?.complete(message);
         _remember(message);
@@ -411,31 +539,63 @@ class OnlineClient {
     _retry = _clock.schedule(wait + jitter, () => unawaited(_reconnect()));
   }
 
-  /// One try to get the seat back, at the server that had the room.
+  /// The ways back to the room, in order: where it was reached last, then
+  /// where it was first reached, then (for a guest) the room through the
+  /// meeting service when it can be reached there ([Welcome.peer]). The
+  /// host's own app is on the room's device: it never goes round.
+  List<String> _waysBack(Welcome welcome) => {
+    url,
+    ?_home,
+    if (welcome.peer && host == null) peerEntry(welcome.code),
+  }.toList();
+
+  /// One try to get the seat back: at the server that had the room, then
+  /// the other ways back ([_waysBack]). Nobody listening counts only at the
+  /// first, and not when another way found the host (it answered through
+  /// the meeting service: it is there).
   Future<void> _reconnect() async {
     final welcome = this.welcome;
     if (status != OnlineStatus.reconnecting || _trying || welcome == null) return;
     _trying = true;
     _tries++;
+    _seat = welcome.token;
+    final first = url;
+    var refused = false, noRoute = false;
     try {
-      await _openAt(url, RejoinRoom(code: welcome.code, token: welcome.token));
-      // Back: the room and a snapshot follow.
-      return;
-    } on OnlineFailure catch (e) {
-      if (e.error case final error?) {
-        // The room is gone, or the seat was given up: nothing to come back to.
-        failure = error;
-        status = OnlineStatus.closed;
-        _remember(null);
-        _changed();
-        return;
+      for (final (i, server) in _waysBack(welcome).indexed) {
+        if (status != OnlineStatus.reconnecting) return;
+        try {
+          await _openAt(server, RejoinRoom(code: welcome.code, token: welcome.token));
+          // Back: the room and a snapshot follow.
+          noDirectRoute = false;
+          return;
+        } on OnlineFailure catch (e) {
+          if (e.error case final error?) {
+            // The room is gone, or the seat was given up: nothing to come back to.
+            failure = error;
+            status = OnlineStatus.closed;
+            _remember(null);
+            _changed();
+            return;
+          }
+          if (i == 0) refused = e.refused;
+          if (e.noDirectRoute) {
+            noRoute = true;
+            refused = false;
+          }
+        }
       }
-      _refusals = e.refused ? _refusals + 1 : 0;
+      // A way that connected but then failed made itself the server: the next try starts where this one did.
+      url = first;
+      _refusals = refused ? _refusals + 1 : 0;
+      if (_refusals == 1) _refusedSince = _clock.nowMs;
+      noDirectRoute = noRoute;
     } finally {
       _trying = false;
     }
     if (status != OnlineStatus.reconnecting) return;
-    if (_refusals >= OnlineTiming.refusalsToGiveUp) {
+    final span = isPeerEntry(first) ? peerRefusalSpan : Duration.zero;
+    if (_refusals >= OnlineTiming.refusalsToGiveUp && _clock.nowMs - _refusedSince >= span.inMilliseconds) {
       // Nobody listens there any more: the host's app (and the room with it) has stopped.
       closeReason = CloseReason.roomClosed;
       status = OnlineStatus.closed;
@@ -464,15 +624,26 @@ class OnlineClient {
     });
   }
 
-  /// Saves what it takes to come back to the room ([w]'s), or forgets it.
+  /// Saves what it takes to come back to the room ([w]'s), or forgets it:
+  /// with every way back, not just the last address that worked.
   void _remember(Welcome? w) {
     if (host != null) return;
     onRecord?.call(
       w == null
           ? null
-          : RejoinRecord(server: url, code: w.code, token: w.token, savedAt: DateTime.now().millisecondsSinceEpoch),
+          : RejoinRecord(
+              server: url,
+              alsoTry: _waysBack(w).skip(1).toList(),
+              code: w.code,
+              token: w.token,
+              savedAt: DateTime.now().millisecondsSinceEpoch,
+            ),
     );
   }
+
+  /// Whether the room can be reached through the meeting service (as its
+  /// host said when this player came in): invites may name it then.
+  bool get atMeetingService => welcome?.peer ?? false;
 
   void _changed() {
     if (!_changes.isClosed) _changes.add(null);

@@ -6,12 +6,19 @@
   <title>Join a PokerFection table</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <!--
-    The invite link's page: join.html?code=K7M2Q&server=192.168.1.20:47474&server=203.0.113.7:47475
-    (the same query as the app's own pokerfection://join link). A secure
-    page can't play against a home host (browsers block it), so this one
-    sends the player where they can: the app, or the host's own web version
-    over http on the same Wi-Fi or from elsewhere. It loads instantly (no
-    Flutter), in English, Spanish or Chinese.
+    The invite link's page: join.html?code=K7M2Q&server=192.168.1.20:47474&server=peer:K7M2Q
+    (the same query as the app's own pokerfection://join link). It offers
+    the app, and playing in this browser: with a peer:CODE entry (the room
+    through the meeting service), this site itself at the room
+    (./?code=K7M2Q&server=peer:K7M2Q), which connects straight to the host's
+    device. When the host serves its own web version too (web=1 in the
+    link), the host's addresses follow as more ways to play in the browser
+    over http: on the same Wi-Fi they need no internet, nor the meeting
+    service, nor direct connections in the browser. An invite without a
+    peer: entry (an older app) can't be played from this secure site
+    (browsers block plain ws:// connections), so it links only to the
+    host's own web version, on the same Wi-Fi or from elsewhere. It loads
+    instantly (no Flutter), in English, Spanish or Chinese.
   -->
   <style>
     :root { color-scheme: dark; }
@@ -56,7 +63,11 @@
           wifiWhere: 'On the same Wi-Fi as the host',
           internet: 'Play in this browser',
           internetWhere: 'From anywhere else',
+          here: 'Play in this browser',
+          hereWhere: 'No app needed',
           hint: 'Have the app? Open it from the first button, or type the room code in Play > Multiplayer. ' +
+            'No app? Play in this browser.',
+          hintOld: 'Have the app? Open it from the first button, or type the room code in Play > Multiplayer. ' +
             'In a browser, pick where you are: on the same Wi-Fi as the host, or anywhere else.',
           none: 'There is no room in this link.',
           game: 'Go to PokerFection'
@@ -68,7 +79,11 @@
           wifiWhere: 'En el mismo Wi-Fi que el anfitrión',
           internet: 'Jugar en este navegador',
           internetWhere: 'Desde cualquier otro lugar',
+          here: 'Jugar en este navegador',
+          hereWhere: 'Sin instalar nada',
           hint: '¿Tienes la app? Ábrela con el primer botón, o escribe el código de sala en Jugar > Multijugador. ' +
+            '¿Sin app? Juega en este navegador.',
+          hintOld: '¿Tienes la app? Ábrela con el primer botón, o escribe el código de sala en Jugar > Multijugador. ' +
             'En un navegador, elige dónde estás: en el mismo Wi-Fi que el anfitrión o en otro lugar.',
           none: 'Este enlace no tiene sala.',
           game: 'Ir a PokerFection'
@@ -80,7 +95,10 @@
           wifiWhere: '与房主在同一个 Wi-Fi',
           internet: '在此浏览器中玩',
           internetWhere: '在其他任何地方',
-          hint: '有应用？用第一个按钮打开，或在 开始 > 多人 中输入房间号。在浏览器中，请按你所在的位置选择：与房主同一个 Wi-Fi，或其他地方。',
+          here: '在此浏览器中玩',
+          hereWhere: '无需安装应用',
+          hint: '有应用？用第一个按钮打开，或在 开始 > 多人 中输入房间号。没有应用？在此浏览器中玩。',
+          hintOld: '有应用？用第一个按钮打开，或在 开始 > 多人 中输入房间号。在浏览器中，请按你所在的位置选择：与房主同一个 Wi-Fi，或其他地方。',
           none: '这个链接里没有房间。',
           game: '前往 PokerFection'
         }
@@ -121,19 +139,45 @@
         return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(host);
       }
 
+      function button(label, small, href) {
+        var node = add('a', 'button web', label, href);
+        var where = document.createElement('span');
+        where.className = 'small';
+        where.textContent = small;
+        node.appendChild(where);
+      }
+
       add('h1', null, t.title);
       add('div', 'code', code);
       add('a', 'button app', t.app, 'pokerfection://join' + location.search);
-      params.getAll('server').map(server).filter(Boolean).forEach(function (s) {
-        var near = local(s.host);
-        var button = add('a', 'button web', near ? t.wifi : t.internet,
-          'http://' + s.host + ':' + s.port + '/?code=' + code);
-        var where = document.createElement('span');
-        where.className = 'small';
-        where.textContent = near ? t.wifiWhere : t.internetWhere;
-        button.appendChild(where);
+      // The room through the meeting service ("peer:" and the code, in any
+      // case): this site plays it, from anywhere. So it does with just a
+      // code (the site looks for it there too).
+      var servers = params.getAll('server');
+      var peer = servers.some(function (value) {
+        return value.trim().toUpperCase() === 'PEER:' + code;
       });
-      add('p', 'hint', t.hint);
+      // The host's own web version, at each of its addresses: the only way
+      // in a browser for an older app's invite; after this site, for a host
+      // that says it serves one.
+      function hostPages() {
+        servers.filter(function (value) {
+          return value.trim().toUpperCase().indexOf('PEER:') !== 0;
+        }).map(server).filter(Boolean).forEach(function (s) {
+          var near = local(s.host);
+          button(near ? t.wifi : t.internet, near ? t.wifiWhere : t.internetWhere,
+            'http://' + s.host + ':' + s.port + '/?code=' + code);
+        });
+      }
+      if (peer || servers.length === 0) {
+        button(t.here, t.hereWhere,
+          './?code=' + code + (peer ? '&server=' + encodeURIComponent('peer:' + code) : ''));
+        if (params.get('web') === '1') hostPages();
+        add('p', 'hint', t.hint);
+        return;
+      }
+      hostPages();
+      add('p', 'hint', t.hintOld);
     })();
   </script>
 </body>

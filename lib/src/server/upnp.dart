@@ -1,5 +1,8 @@
 /// Opening a port in the home router with UPnP (Internet Gateway Device),
-/// so friends on the internet can reach a room hosted on this device.
+/// so friends on the internet can also reach a room hosted on this device
+/// at the router's public address: a second way in, behind the direct
+/// connections (PeerHost), for guests whose network can't connect directly.
+/// It runs silently: nobody is ever asked to set up a router.
 /// Plain dart:io, no packages:
 /// 1. find the router: SSDP, an M-SEARCH to 239.255.255.250:1900;
 /// 2. read its description (XML) for the WANIPConnection (or
@@ -8,7 +11,8 @@
 ///    and DeletePortMapping when done.
 ///
 /// Every step is best effort: a router without UPnP, or with it off, just
-/// means no internet play (same-network play doesn't need any of this).
+/// means no second way in (direct connections and same-network play don't
+/// need any of this).
 library;
 
 import 'dart:async';

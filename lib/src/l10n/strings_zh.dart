@@ -6,7 +6,7 @@ import '../gto/preflop/preflop_charts.dart';
 import '../gto/hand_read.dart';
 import '../gto/spot_strategy.dart';
 import '../online/protocol.dart' show CloseReason, JoinError;
-import '../online/room_host.dart' show InternetAccess;
+import '../online/peer_status.dart' show PeerPhase, PeerStatus, PeerTrouble;
 import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
 import 'strings.dart';
 
@@ -402,60 +402,43 @@ class StringsZh extends S {
   @override
   String get cantStartRoom => '无法在这台设备上开启房间。';
   @override
-  String get cantHostInBrowser => '房间要在应用中创建（Windows、Android、iPhone）。在这里可以加入房间。';
+  String get cantHostInBrowser => '这个浏览器不能主持房间。可以在这里加入房间，或在应用中主持。';
   @override
-  String get websiteCantJoin => '这个网站无法连接到别人设备上的房间：请改为打开邀请中的浏览器地址。';
+  String get roomNotNearby => '找不到房间：请检查房间号和网络连接。';
   @override
-  String get roomNotNearby => '这个网络里没有这个房间号的房间：请向房主要邀请。';
+  String get noDirectRoute => '无法从这个网络直接连接到房主。请换一个网络（例如用 Wi-Fi 代替移动数据），或在同一 Wi-Fi 下游戏。';
+  @override
+  String get cantReachServer => '无法连接到服务器';
+  @override
+  String get wsOnWebsite => '此网站无法使用 ws:// 服务器。请使用 wss://，或清空服务器。';
   @override
   String sameWifi(bool yes) => yes ? '同一 Wi-Fi：可以' : '同一 Wi-Fi：没有网络';
   @override
-  String internetStatus(InternetAccess access) => switch (access) {
-        InternetAccess.checking => '互联网：检查中…',
-        InternetAccess.ready => '互联网：就绪',
-        _ => '互联网：不可用',
+  String get sameWifiAppOnly => '同一 Wi-Fi：仅限应用';
+  @override
+  String internetStatus(PeerStatus status) => switch (status.phase) {
+        PeerPhase.starting => '互联网：连接中…',
+        PeerPhase.ready => '互联网：就绪',
+        PeerPhase.unavailable => switch (status.trouble) {
+            PeerTrouble.codeTaken => '互联网：不可用（繁忙：请新建房间）',
+            PeerTrouble.unsupported => '互联网：此设备上不可用',
+            _ => '互联网：不可用（无连接）',
+          },
       };
   @override
-  String get internetByHand => '互联网：手动设置';
-  @override
-  String internetHelp({
-    required InternetAccess access,
-    required int port,
-    String? address,
-    String? byHand,
-    required bool windows,
-    required bool phone,
-  }) =>
-      [
-        switch (access) {
-          InternetAccess.checking => '应用正在请求路由器允许互联网上的朋友进入。',
-          InternetAccess.ready => '路由器已打开端口 $port：互联网上的朋友可以用邀请加入。',
-          InternetAccess.noRouter => '没有路由器响应自动设置（UPnP 已关闭，或路由器不支持）。',
-          InternetAccess.refused => '路由器拒绝打开端口。',
-          InternetAccess.notPublic => '路由器没有自己的公网地址：网络运营商共用地址（CGNAT），或者前面还有一台路由器。',
-          InternetAccess.byHand => '在 iPhone 和 iPad 上，应用无法设置路由器。',
-        },
-        if (access != InternetAccess.ready)
-          '手动打开：在路由器设置中，把 TCP 端口 $port 转发到 ${address ?? '这台设备'}。然后在房间里的“公网地址”'
-              '中输入路由器的公网 IP：邀请就会带上它。',
-        if (byHand != null) '已手动设置：邀请带有 $byHand。应用无法检查它是否可用：请外面的朋友打开 http://$byHand/health 试试。',
-        '同一 Wi-Fi 下总能连上。',
-        if (windows) '第一次时，Windows 防火墙会询问是否允许 PokerFection 使用网络：请允许。',
-        '有些网络运营商（共用地址，CGNAT）和移动数据网络下，没有外部服务器就无法通过互联网游戏。',
-        if (phone) '做房主时请让应用保持在屏幕上打开：应用关闭或转到后台时，房间就会停止。使用移动数据时，互联网上的朋友通常无法加入。',
-      ].join('\n\n');
-  @override
-  String get publicAddress => '公网地址';
-  @override
-  String get notPublicAddress => '请输入你的公网 IP，例如 203.0.113.7';
-  @override
-  String publicAddressHelp({required int port, String? address, required bool windows}) => [
-        '适用于不能自动打开端口的路由器（UPnP 已关闭）。手动打开一次：在路由器的设置页面或应用里找到“端口转发”，'
-            '把 TCP 端口 $port 转发到${windows ? '这台电脑' : '这台设备'}${address == null ? '' : '（$address）'}。',
-        '然后在这里输入你的公网 IP：路由器的应用或状态页面会显示它（WAN 或互联网 IP 地址），也可以搜索“我的 IP”。'
-            '如果路由器把外面的另一个端口转到 $port，请加上它：203.0.113.7:47500。',
-        '之后邀请会带上它，浏览器链接也会用它。应用无法检查它是否可用：请外面的朋友打开 '
-            'http://<公网 IP>:$port/health 试试。大多数公网 IP 会不时变化：玩之前请再查一下。',
+  String internetHelp({required PeerStatus status, required bool windows, required bool phone, bool browser = false}) => [
+        if (status.phase == PeerPhase.unavailable)
+          switch (status.trouble) {
+            PeerTrouble.codeTaken => '配对服务无法为这个房间分配名称。请为其他地方的朋友新建一个房间。',
+            PeerTrouble.unsupported => '这个版本的应用无法通过互联网连接。',
+            _ => '无法连接到配对服务（没有网络？）。应用会继续尝试。',
+          },
+        '任何地方的朋友都可以用房间号或邀请加入。',
+        '一个免费的公共配对服务帮设备互相找到对方，之后游戏在设备之间直接进行，并且加密。',
+        if (browser) '有些网络（常见于移动数据）无法直接连接。没有互联网时，只有在应用中主持的房间才能在同一 Wi-Fi 下连接。' else '有些网络（常见于移动数据）无法直接连接。同一 Wi-Fi 下总能连上，即使没有互联网。',
+        if (browser) '主持期间请保持此标签页打开：关闭标签页，房间也会关闭。',
+        if (windows) '第一次时，Windows 防火墙会询问 PokerFection 能否使用网络：请允许。',
+        if (phone) '主持期间请让应用保持在屏幕上：应用关闭或进入后台时，房间会停止。',
       ].join('\n\n');
   @override
   String get connecting => '正在连接…';
@@ -470,14 +453,14 @@ class StringsZh extends S {
         JoinError.roomGone => '房间已关闭',
         JoinError.seatGone => '离开太久：请重新加入',
         JoinError.removed => '房主已将你移出房间',
-        null => '无法连接服务器',
+        null => '无法连接到房间',
       };
   @override
   String room(String code) => '房间 $code';
   @override
   String get copied => '已复制';
   @override
-  String get shareCode => '同一 Wi-Fi 下只需房间号；其他人请发送邀请。';
+  String get shareCode => '朋友用这个房间号或邀请加入。';
   @override
   String get host => '房主';
   @override
@@ -814,10 +797,10 @@ class StringsZh extends S {
         GlossaryTerm.host => '创建房间的玩家：房间运行在其设备上。房主设置牌桌、辅助和时限，开始游戏，并操控机器人。'
             '房主可以移出玩家：在房间里或“☰ > 编辑牌桌”中点击其座位，再选“移出”。对方立即离开（如果正在一手牌中，'
             '则在这手结束时），并且无法再加入这个房间。房主离开后，房间关闭。',
-        GlossaryTerm.hosting => '“创建房间”会在你的设备上开启房间：游戏通过房主的应用进行，不需要外部服务器。同一 Wi-Fi '
-            '下的朋友用房间号或邀请加入；其他地方的朋友在路由器放行后用邀请加入（应用会尝试自动设置，见房间里的“互联网”）。'
-            '没有应用的朋友可以用浏览器打开邀请中的地址（如果应用带有网页版）。房主离开或关闭应用时，房间结束。'
-            '浏览器版不能主持房间，只能加入。',
+        GlossaryTerm.hosting => '“创建房间”会在你的设备上开启房间：游戏通过房主的应用进行，不需要我们的游戏服务器。朋友用房间号'
+            '或邀请加入：同一 Wi-Fi 下即使没有互联网也可以；在其他地方，一个免费的公共配对服务帮设备互相找到对方，之后游戏在'
+            '设备之间直接进行，并且加密（有些网络，常见于移动数据，无法直接连接）。没有应用的朋友可以通过邀请在浏览器中玩。'
+            '房主离开或关闭应用时，房间结束。也可以在浏览器中主持：这时所有人都通过互联网加入，关闭标签页房间就会关闭。',
         GlossaryTerm.onlineBots => '新房间里只有房主，其他座位都是空的。加入的朋友坐到空座位上，房主可以添加机器人'
             '（各有打法风格）或将其移除。每手牌只发给有人的座位，所以至少需要 2 名玩家；人数不够时游戏会等待。'
             '游戏中加入、离开、添加或移除机器人都从下一手开始生效，离开的玩家会留下一个空座位。',

@@ -7,7 +7,17 @@ import 'package:pokerfection/src/engine/events.dart';
 import 'package:pokerfection/src/engine/rules.dart';
 import 'package:pokerfection/src/gto/spot_strategy.dart';
 import 'package:pokerfection/src/l10n/strings.dart';
+import 'package:pokerfection/src/online/peer_status.dart';
 import 'package:pokerfection/src/ui/table_controller.dart' show PlaybackSpeed;
+
+/// Every way the lobby can show the internet (see PeerStatus).
+const _peerStatuses = [
+  PeerStatus.starting,
+  PeerStatus.ready,
+  PeerStatus.unavailable(PeerTrouble.unreachable),
+  PeerStatus.unavailable(PeerTrouble.codeTaken),
+  PeerStatus.unavailable(PeerTrouble.unsupported),
+];
 
 void main() {
   for (final language in AppLanguage.values) {
@@ -31,6 +41,17 @@ void main() {
         s.potShare(0.33),
         s.potShare(1),
         s.potShare(0.4),
+        s.noDirectRoute,
+        s.roomNotNearby,
+        for (final status in _peerStatuses) ...[
+          s.internetStatus(status),
+          s.internetHelp(status: status, windows: true, phone: true),
+          s.internetHelp(status: status, windows: false, phone: false, browser: true),
+        ],
+        s.sameWifiAppOnly,
+        s.cantReachServer,
+        s.wsOnWebsite,
+        s.cantHostInBrowser,
       ];
       expect(texts.every((t) => t.isNotEmpty), isTrue);
     });

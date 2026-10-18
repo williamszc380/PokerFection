@@ -6,7 +6,7 @@ import '../gto/preflop/preflop_charts.dart';
 import '../gto/hand_read.dart';
 import '../gto/spot_strategy.dart';
 import '../online/protocol.dart' show CloseReason, JoinError;
-import '../online/room_host.dart' show InternetAccess;
+import '../online/peer_status.dart' show PeerPhase, PeerStatus, PeerTrouble;
 import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
 import 'strings.dart';
 
@@ -402,70 +402,50 @@ class StringsEn extends S {
   @override
   String get cantStartRoom => "Can't start a room on this device.";
   @override
-  String get cantHostInBrowser => 'Rooms are hosted in the app (Windows, Android, iPhone). Here you can join one.';
+  String get cantHostInBrowser => "This browser can't host a room. Join one here, or host in the app.";
   @override
-  String get websiteCantJoin =>
-      "This website can't reach a room on someone's device: open the browser address from the invite instead.";
+  String get roomNotNearby => "Can't find the room: check the code and your internet.";
   @override
-  String get roomNotNearby => 'No room with that code on this network: ask the host for the invite.';
+  String get noDirectRoute => "Can't connect directly to the host from this network. Try another network (Wi-Fi "
+      'instead of mobile data), or play on the same Wi-Fi.';
+  @override
+  String get cantReachServer => "Can't reach the server";
+  @override
+  String get wsOnWebsite => "This website can't use a ws:// server. Use wss://, or clear the server.";
   @override
   String sameWifi(bool yes) => yes ? 'Same Wi-Fi: yes' : 'Same Wi-Fi: no network';
   @override
-  String internetStatus(InternetAccess access) => switch (access) {
-        InternetAccess.checking => 'Internet: checking…',
-        InternetAccess.ready => 'Internet: ready',
-        _ => 'Internet: not available',
+  String get sameWifiAppOnly => 'Same Wi-Fi: app only';
+  @override
+  String internetStatus(PeerStatus status) => switch (status.phase) {
+        PeerPhase.starting => 'Internet: connecting…',
+        PeerPhase.ready => 'Internet: ready',
+        PeerPhase.unavailable => switch (status.trouble) {
+            PeerTrouble.codeTaken => 'Internet: not available (busy: create a new room)',
+            PeerTrouble.unsupported => 'Internet: not available on this device',
+            _ => 'Internet: not available (no connection)',
+          },
       };
   @override
-  String get internetByHand => 'Internet: set by hand';
-  @override
-  String internetHelp({
-    required InternetAccess access,
-    required int port,
-    String? address,
-    String? byHand,
-    required bool windows,
-    required bool phone,
-  }) =>
-      [
-        switch (access) {
-          InternetAccess.checking => 'The app is asking your router to let friends on the internet in.',
-          InternetAccess.ready => 'Your router opened port $port: friends on the internet can join with the invite.',
-          InternetAccess.noRouter => 'No router answered the automatic setup (UPnP is off, or the router has none).',
-          InternetAccess.refused => 'Your router refused to open the port.',
-          InternetAccess.notPublic => 'Your router has no public address of its own: the internet provider shares '
-              'one (CGNAT), or another router sits in front of it.',
-          InternetAccess.byHand => "On iPhone and iPad the app can't set up the router.",
-        },
-        if (access != InternetAccess.ready)
-          "To open it by hand: in your router's settings, forward TCP port $port to ${address ?? 'this device'}. "
-              "Then type the router's public IP under Public address in the lobby: invites carry it.",
-        if (byHand != null)
-          "Set by hand: invites carry $byHand. The app can't check it: ask a friend outside to open "
-              'http://$byHand/health.',
-        'Same Wi-Fi always works.',
+  String internetHelp({required PeerStatus status, required bool windows, required bool phone, bool browser = false}) => [
+        if (status.phase == PeerPhase.unavailable)
+          switch (status.trouble) {
+            PeerTrouble.codeTaken => "The meeting service couldn't give this room a name. Create a new room for "
+                'friends elsewhere.',
+            PeerTrouble.unsupported => "This version of the app can't connect over the internet.",
+            _ => "The meeting service can't be reached (no internet?). The app keeps trying.",
+          },
+        'Friends anywhere can join with the code or the invite.',
+        'A free public meeting service introduces the devices. Then the game goes device to device, encrypted.',
+        if (browser)
+          "Some networks (often mobile data) can't connect directly. Same Wi-Fi without internet works only when "
+              'the room is hosted in the app.'
+        else
+          "Some networks (often mobile data) can't connect directly. Same Wi-Fi always works, even without internet.",
+        if (browser) 'Keep this tab open while you host: the room closes with the tab.',
         if (windows) 'The first time, Windows Firewall asks whether PokerFection may use the network: allow it.',
-        'Some internet providers (shared addresses, CGNAT) and mobile data make playing over the internet impossible '
-            'without an outside server.',
         if (phone)
-          'Keep the app open on screen while you host: the room stops when the app closes or goes to the background. '
-              "On mobile data, friends on the internet usually can't join.",
-      ].join('\n\n');
-  @override
-  String get publicAddress => 'Public address';
-  @override
-  String get notPublicAddress => 'Type your public IP, like 203.0.113.7';
-  @override
-  String publicAddressHelp({required int port, String? address, required bool windows}) => [
-        "For a router that can't open the port by itself (UPnP off). Open it by hand once: in the router's "
-            'settings page or app, find Port forwarding and forward TCP port $port to '
-            '${windows ? 'this PC' : 'this device'}${address == null ? '' : ', $address'}.',
-        "Then type your public IP here. The router's app or status page shows it (WAN or Internet IP address), "
-            'or search "what is my IP". If the router leads another port outside to $port, add it: '
-            '203.0.113.7:47500.',
-        "Invites then carry it, and so does the browser link. The app can't check it: ask a friend outside to "
-            'open http://<public IP>:$port/health. Most public IPs change from time to time: check it before you '
-            'play.',
+          'Keep the app open on screen while you host: the room stops when the app closes or goes to the background.',
       ].join('\n\n');
   @override
   String get connecting => 'Connecting…';
@@ -480,14 +460,14 @@ class StringsEn extends S {
         JoinError.roomGone => 'The room has closed',
         JoinError.seatGone => 'You were away too long: join again',
         JoinError.removed => 'The host removed you from the room',
-        null => "Can't reach the server",
+        null => "Can't reach the room",
       };
   @override
   String room(String code) => 'Room $code';
   @override
   String get copied => 'Copied';
   @override
-  String get shareCode => 'On the same Wi-Fi the code is enough; send the invite to the others.';
+  String get shareCode => 'Friends join with this code or the invite.';
   @override
   String get host => 'Host';
   @override
@@ -861,10 +841,11 @@ class StringsEn extends S {
             "the lobby or ☰ > Edit Table, then Remove. They go at once (if they're in a hand, when it ends) and can't "
             'join the room again. If the host leaves, the room closes.',
         GlossaryTerm.hosting => "Create Room runs the room on your device: the game goes through the host's app, with "
-            'no outside server. Friends on the same Wi-Fi join with the code or the invite; friends elsewhere join with '
-            'the invite once your router lets them in (the app tries to set that up: see Internet in the lobby). '
-            "Friends without the app open the invite's browser address (when the app has the web version). The room "
-            "ends when the host leaves or closes the app. The browser version can't host a room, only join one.",
+            'no game server of ours. Friends join with the code or the invite: on the same Wi-Fi even without '
+            'internet; from anywhere else, a free public meeting service introduces the devices, then the game goes '
+            "device to device, encrypted (some networks, often mobile data, can't connect directly). Friends without "
+            'the app play in a browser from the invite. The room ends when the host leaves or closes the app. A '
+            'browser can host too: everyone then joins over the internet, and the room closes with the tab.',
         GlossaryTerm.onlineBots => 'A new room has only the host: the other seats are empty. Friends who join take an '
             'empty seat, and the host can add bots (each with a play style) or take them away. A hand is dealt to the '
             'seats taken, so it needs at least 2 players; with fewer the game waits. Joining, leaving, adding or '

@@ -8,6 +8,7 @@
 //   ./run --profile=2      another copy with its own settings and name online
 //                          (--profile 2 works too), to play against yourself
 //   ./run --release        any other option goes to `flutter run`
+//   ./run -h               what it does and its options (also --help)
 //
 // Only one `flutter run` per OS can run at a time: the running game locks
 // its program file against a rebuild. So while the game is running,
@@ -15,7 +16,40 @@
 // reload (start it again to pick up changes).
 import 'dart:io';
 
+/// Options that show [_help] instead of starting the game. They take the
+/// place of `flutter run`'s own -h, which `flutter run -h` still shows.
+const _helpOptions = {'-h', '--help'};
+
+const _help = '''
+Runs PokerFection on this computer (Windows, macOS or Linux), with hot reload.
+
+Usage: ./run [options]     (run.cmd works the same in cmd)
+
+Options:
+  -h, --help           Show this help.
+  --profile N          Start another copy with its own settings and online
+  --profile=N          name (N = 2, 3, ...), to play against yourself. If the
+                       game is already running, the copy starts from the last
+                       build, without hot reload.
+  anything else        Goes to flutter run, e.g. --release or -v
+                       (all of them: flutter run -h).
+
+While the game runs, in this window:
+  r  hot reload    R  hot restart    q  quit
+
+Examples:
+  ./run
+  ./run --profile 2
+  ./run --release
+
+Flutter comes from FLUTTER_ROOT, else ~/dev/flutter, else the PATH.
+''';
+
 Future<void> main(List<String> args) async {
+  if (args.any(_helpOptions.contains)) {
+    stdout.write(_help);
+    return;
+  }
   // The project root, wherever the script was started from.
   Directory.current = File.fromUri(Platform.script).parent.parent;
   final device = switch (Platform.operatingSystem) {

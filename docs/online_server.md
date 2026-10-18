@@ -1,19 +1,23 @@
 # Playing online with friends
 
-PokerFection needs no outside service to play online. Whoever creates the
-room **hosts** it: the game server runs inside their app, and everyone else
-(the host's own app too) connects to it. Nothing goes through the internet
-unless friends join from outside your home, and then they connect straight
-to your device.
+PokerFection needs no game server of its own to play online. Whoever creates
+the room **hosts** it: the game runs inside their app, and everyone else
+(the host's own app too) connects to it.
+
+- **On the same Wi-Fi**, friends connect straight to the host's device over
+  the home network. This works even without internet.
+- **From anywhere else**, friends join with the same code or invite. A free
+  public meeting service introduces the two devices, and then the game goes
+  straight from device to device, encrypted. Nothing to set up: no router
+  settings, no accounts.
 
 This guide takes you through it step by step:
 
 1. [Host a room](#1-host-a-room-on-windows) (on Windows)
-2. [Invite friends](#2-invite-friends): on the same Wi-Fi, over the
-   internet, or in a browser
-3. [Open the port by hand](#3-open-the-port-by-hand) when the automatic
-   router setup didn't work
-4. [When internet play isn't available](#4-when-internet-play-isnt-available)
+2. [Invite friends](#2-invite-friends): on the same Wi-Fi, from anywhere,
+   or in a browser
+3. [When a direct connection isn't possible](#3-when-a-direct-connection-isnt-possible)
+4. [What the public helpers see](#4-what-the-public-helpers-see)
 5. [Host from a phone](#5-host-from-a-phone)
 6. [If something goes wrong](#6-if-something-goes-wrong)
 
@@ -46,12 +50,13 @@ better.
    - the **room code** (five letters, for example `K7M2Q`) and the
      **Invite** button;
    - **Same Wi-Fi: yes**: friends on your network can join;
-   - **Internet: checking…**, then **Internet: ready** (friends anywhere
-     can join) or **Internet: not available** (only friends on your
-     network, unless you [open the port by hand](#3-open-the-port-by-hand)
-     and type your public address in the **Public address** box below it:
-     then it says **Internet: set by hand**).
-     The **?** next to it says why, and shows your port and local address.
+   - **Internet: connecting…**, then **Internet: ready**: friends anywhere
+     can join with the code or the invite. **Internet: not available**
+     says why in brackets: *no connection* (no internet, or the meeting
+     service can't be reached; the app keeps trying), or *busy* (the
+     meeting service couldn't give the room a name: create a new room for
+     friends elsewhere). Friends on your Wi-Fi can join either way.
+     The **?** next to it explains how it works in a few lines.
 6. Set the table. Everyone in the lobby sees your settings as you change
    them; only you can change them:
    - **Seats** (2 to 8), starting stack, **Ante**, **Min-Raise** rule;
@@ -156,16 +161,17 @@ table from **☰ > Chat**, also while out of chips or waiting for a seat.
 - The room keeps the last 64 messages: friends who join (or come back after
   their connection dropped) see them.
 
-The room uses port **47474** on your PC (TCP for the game, UDP for finding
-the room by its code). If another program already uses it, the app takes
-the next free one (47475, 47476, … up to 47483); the lobby's **?** always
-shows the port in use.
+The room uses port **47474** on your PC for friends on the same Wi-Fi (TCP
+for the game, UDP for finding the room by its code). If another program
+already uses it, the app takes the next free one (47475, 47476, … up to
+47483). Friends from elsewhere don't use this port: they connect directly,
+through the meeting service.
 
 ## 2. Invite friends
 
 ### Friends on the same Wi-Fi (easiest)
 
-This always works, with nothing to set up.
+This always works, even without internet, with nothing to set up.
 
 1. Your friends open PokerFection, press **Play > Multiplayer** and type
    their name.
@@ -179,6 +185,22 @@ Friends on a **guest Wi-Fi** network can't reach devices on the main one
 (that is what guest networks are for): everyone should use the same
 network.
 
+### Friends anywhere else
+
+Once the lobby says **Internet: ready**, friends anywhere can join:
+
+- **With the code alone:** they type it on **Play Online** and press **Join
+  Room**. The app first looks for the room on their own network, then asks
+  the meeting service for it.
+- **With the invite** (next part), which does the same in one click.
+
+Joining from elsewhere takes a second or two with the code. With the
+invite it can take a few seconds more: the app first tries your addresses
+on your Wi-Fi (a few seconds each), then the meeting service. If a
+friend's network can't connect directly to yours, they see "Can't connect
+directly to the host from this network": see
+[When a direct connection isn't possible](#3-when-a-direct-connection-isnt-possible).
+
 ### Sending the invite
 
 1. In the lobby (or **☰ > Edit Table** during the game), press **Invite**.
@@ -186,168 +208,145 @@ network.
    message, with the room code.
 
 The link looks like
-`pokerfection://join?code=K7M2Q&server=192.168.1.20:47474&...`. On a
-device with PokerFection, clicking it opens the app at Play Online with
-everything filled in; your friend types their name and presses **Join
-Room**. If the link doesn't open the app, they can copy it, press the
-**Paste** button in the code box, and press **Join Room**.
+`https://williamszc380.github.io/PokerFection/join.html?code=K7M2Q&server=192.168.1.20:47474&server=peer:K7M2Q`.
+It opens a small page with the room code and an **Open in the PokerFection
+app** button, which opens the app at Play Online with everything filled in;
+your friend types their name and presses **Join Room**. If the link doesn't
+open the app, they can copy it, press the **Paste** button in the code box,
+and press **Join Room**.
 
-The link lists every way to reach you, in order: your PC's addresses on the
-local network first, then your public internet address when the router
-opened the port (or when you typed it, see
-[Open the port by hand](#3-open-the-port-by-hand)). The app tries them one
-after the other.
+The link lists every way to reach you, in order, and the app tries them one
+after the other:
 
-### Friends on the internet
+1. your PC's addresses on the local network (same Wi-Fi: quickest);
+2. `peer:K7M2Q`: the room through the meeting service, from anywhere;
+3. sometimes, your router's public address: when your router lets the app
+   open the port by itself (UPnP), the app does so quietly, as a second way
+   in for friends whose network can't connect directly. You never need to
+   set anything up for this.
 
-**If the lobby says "Internet: ready"**, your router opened the port by
-itself (this is called UPnP). Just send the invite link: it now includes
-your public address, and friends anywhere can join with it.
-
-Good to know:
-
-- The app keeps the port open while the room is open and closes it again
-  when the room closes. If the app is killed, the router forgets the
-  opening by itself within an hour (a few routers only when they restart).
-- The port outside may differ from 47474 (when that one is taken in the
-  router, the app picks another); the invite always has the right one.
-  Some routers won't renew an opening: then the app opens another port
-  every 20 minutes and the invite changes with it (friends already in
-  stay in).
-- Your router's UPnP page may list old "PokerFection" or "miniupnpd"
-  entries after rooms have closed (some routers keep a trace of closed
-  openings). They lead nowhere; restarting the router clears them.
-- Joining at your own public address from inside your home may fail even
-  when it works for friends outside (many routers don't loop back); ask a
-  friend to try.
-
-**If the lobby says "Internet: not available"**, tap the **?** next to it
-to see why:
-
-- *No router answered the automatic setup*: UPnP is off in your router (or
-  it has none). Either turn **UPnP** on in the router's settings and create
-  the room again, or [open the port by hand](#3-open-the-port-by-hand).
-- *Your router refused to open the port*: [open it by hand](#3-open-the-port-by-hand).
-- *Your router has no public address of its own*: see
-  [When internet play isn't available](#4-when-internet-play-isnt-available).
+A guest's own **Invite** works too: it carries the address they joined at,
+then the room through the meeting service (when your room can be reached
+there; never for a room on a server of your own).
 
 ### Friends without the app (in a browser)
 
-A host on Windows also serves the browser version of the game, so friends
-can play in Chrome, Edge, Firefox or Safari without installing anything
-(on a computer, a tablet or a phone).
+Friends can play in Chrome, Edge, Firefox or Safari without installing
+anything (on a computer, a tablet or a phone), from anywhere.
 
 1. Press **Invite**, then **Copy invite link**, and send it: the same link
-   as for friends with the app. It opens a small page on the PokerFection
-   website with the room code and a button for each way in: **Open in the
-   PokerFection app**, **Play in this browser (on the same Wi-Fi as the
-   host)**, and, once the lobby says **Internet: ready** (or **set by
-   hand**), **Play in this browser (from anywhere else)**.
-2. Your friend presses the button for where they are. A browser button
-   opens your PC's own copy of the game, like
-   `http://192.168.1.20:47474/?code=K7M2Q`, at **Play Online** with the
-   room code filled in.
-3. They type their name and press **Join Room**.
+   as for friends with the app. Its page has, besides **Open in the
+   PokerFection app**, a **Play in this browser** button.
+2. That button opens the website at **Play Online** with the room code
+   filled in. The website connects straight to your device through the
+   meeting service, like the app does (and like the app, some networks
+   can't connect directly: then try another network).
+3. Your friend types their name and presses **Join Room**.
+
+When you host in the Windows app (which includes the browser version), the
+page also has **Play in this browser (on the same Wi-Fi as the host)**: it
+opens your PC's own copy of the game, like
+`http://192.168.1.20:47474/?code=K7M2Q`, which needs no internet and no
+meeting service. Friends in a browser on your Wi-Fi can use it when the
+first button doesn't work. When your router opened the port by itself,
+there is also **(from anywhere else)**, your PC's copy at your public
+address.
 
 Good to know:
 
-- The browser buttons only work when your app includes the browser
-  version. Windows builds include it once it has been built (see the
-  README: `dart run tool/build_web.dart --host`); the phone apps don't
-  serve it.
-- Some routers don't let a device at home reach the home's own public
-  address: on your Wi-Fi, use the **same Wi-Fi** button.
-- The website itself can't play at your table: browsers don't let a secure
-  (https) website reach a game on someone's PC. That's why its join page
-  sends your friends to the app or to your PC's own copy of the game.
-- On that page the **Paste** button may not be allowed to read the
-  clipboard: paste with **Ctrl+V** (or a long press on a phone) in the box
-  instead.
+- An invite from an older version of the app (without `peer:` in it)
+  shows **Play in this browser (on the same Wi-Fi as the host)** and
+  **(from anywhere else)** buttons instead: they open the host's own copy
+  of the game, like `http://192.168.1.20:47474/?code=K7M2Q`, which works
+  only when that app includes the browser version (see the README:
+  `dart run tool/build_web.dart --host`).
+- On a host's own copy (http), the **Paste** button may not be allowed to
+  read the clipboard: paste with **Ctrl+V** (or a long press on a phone) in
+  the box instead.
 - If the page reloads (phones do this to tabs in the background), the
   button reads **Rejoin Room**: it takes your friend back to their seat
   (kept for 2 minutes).
-- A browser can't host a room, only join one.
+- A browser can host too: on the website, **Play > Multiplayer > Create
+  Room** (greyed out in a browser without WebRTC, with why). The room runs
+  in that tab, and every friend comes in through the meeting service, even
+  on the same Wi-Fi (so it needs internet: the lobby shows **Same Wi-Fi:
+  app only** greyed out). Keep the tab open: the lobby's **?** says so,
+  closing the tab asks first, and then the room closes for everyone. A browser in the background may be slowed down by the browser
+  itself; the app is the better host.
 - In Chinese, the browser version downloads its Chinese font from the
   internet: on a network without internet access, use English or Spanish
   there. The chat's emoji come from the internet the same way (without
   it they show as empty boxes; **GG!** always works).
 
-## 3. Open the port by hand
+## 3. When a direct connection isn't possible
 
-Do this once if the automatic setup didn't work. You need your router's
-settings page (the address and password are usually on a sticker on the
-router).
+Most home networks let two devices connect directly. Some don't: mobile
+data often, and some company, school or hotel networks. PokerFection has no
+relay of its own that could carry the game between such networks, so then
+your friend sees:
 
-1. In the lobby, tap the **?** next to **Internet**. Note the **port**
-   (normally 47474) and your PC's **local address** (like `192.168.1.20`).
-2. Open your router's settings: type its address in a browser (often
-   `192.168.1.1` or `192.168.0.1`; also printed on the router) and log in.
-3. Find **Port forwarding**. Routers call it different names: Virtual
-   servers, NAT, Applications & gaming, Port mapping.
-4. Add a rule:
-   - Protocol: **TCP**;
-   - External (or public) port: **47474**;
-   - Internal (or private) port: **47474**;
-   - Device or internal IP address: your PC's local address from step 1.
+> Can't connect directly to the host from this network. Try another network
+> (Wi-Fi instead of mobile data), or play on the same Wi-Fi.
 
-   Save it.
-5. Find your **public address**: the router's app or status page shows it
-   (as WAN, Internet or public IP address), or search the web for "what is
-   my IP". Say it is `203.0.113.7`.
-6. Back in the lobby, type it in the **Public address** box under
-   **Internet** (the box shows while the lobby doesn't say **Internet:
-   ready**; its **?** repeats these steps with your port and local
-   address). If the rule's external port isn't the room's port, add it:
-   `203.0.113.7:47500`. The lobby then says **Internet: set by hand**, and
-   the invite (after your local addresses, and as the join page's **from
-   anywhere else** button) carries your public address. The app remembers it for your next rooms; empty the
-   box to stop using it.
-7. Check it from outside: the app can't. A friend opens
-   `http://203.0.113.7:47474/health` in a browser. It should show
-   "PokerFection server, …". If the page doesn't load, the rule or the
-   firewall isn't right yet.
+What helps:
 
-Without the box (a server of your own, say), friends can still join at
-your public address: an app link they click or paste,
-`pokerfection://join?code=K7M2Q&server=203.0.113.7:47474`; the **Server**
-line under the code box on Play Online, `ws://203.0.113.7:47474/ws`, then
-the room code; or for browser friends, `http://203.0.113.7:47474/?code=K7M2Q`.
+The same message ends a game for a player whose connection dropped and
+who can't get back in from the network they are on now (a phone that
+moved to mobile data, say).
 
-Keep the rule working next time:
+1. **Try another network.** Connect the phone to Wi-Fi instead of mobile
+   data (or the other way round), on either side.
+2. **Let someone else host.** The connection depends on both networks: a
+   friend on a different network may connect to everyone.
+3. **Play on the same Wi-Fi.** It always works, even without internet.
+4. **Host on Wi-Fi or a cable,** not on mobile data.
 
-- Your PC's local address can change when it reconnects to the Wi-Fi. In
-  the router, give it a fixed one (called "address reservation", "static
-  lease" or "DHCP reservation").
-- If 47474 was busy and the room used another port (the **?** says which),
-  the rule must use that port instead.
-- Most home internet connections change their public address from time to
-  time: look it up again before you play, and correct the **Public
-  address** box.
+When your router opened the port by itself, invites also carry your public
+address, so some of those friends still get in that way. This happens
+quietly; there is nothing to set up.
 
-## 4. When internet play isn't available
+## 4. What the public helpers see
 
-Some internet providers share one public address between many homes. This
-is called **CGNAT**, and **mobile data** almost always works this way. Then
-nobody outside can reach your device: not with the automatic setup, not by
-hand. The lobby's **?** says so ("Your router has no public address of its
-own"); you can also tell when the public address on the router's status
-page starts with `100.64` to `100.127`, `10.`, `172.16` to `172.31` or
-`192.168.`, or doesn't match what "what is my IP" shows.
+Two kinds of free public services help devices on different networks find
+each other. Neither carries the game.
 
-The same happens when a second router sits in front of yours (for example
-the internet provider's box in front of your own Wi-Fi router). Then you can
-open the port in both, or set the provider's box to "bridge mode".
+- **The meeting service** (PeerJS's public server, `0.peerjs.com`):
+  each room's host holds a name there made from the room code
+  (`pokerfection-v1-K7M2Q`), and each guest a random one for a moment. They
+  pass a few short messages through it to set up the connection: the
+  devices' network addresses and the encryption keys' fingerprints. Once
+  the devices are connected, nothing else goes through it; guests let go of
+  their name after a few seconds, the host when the room closes.
+- **STUN servers** (Google's and Cloudflare's): each device asks them once
+  which address the internet sees it at.
 
-What you can do, without any outside service:
+They see your public IP address and the room code, never your name, the
+chat, the cards or the bets: the game itself goes straight between the
+devices, encrypted (WebRTC). On the same Wi-Fi none of this is used.
 
-1. **Play on the same Wi-Fi.** It always works: friends who come over, or
-   family on the home network.
-2. **Let a friend host.** Their connection may allow it: if their lobby
-   says **Internet: ready**, everyone joins their room instead.
-3. **Ask your internet provider for a public IPv4 address.** Many give one
-   on request (sometimes for a small fee); then the automatic setup or the
-   port rule works.
-4. Don't host on mobile data: connect the host to Wi-Fi or a cable.
+The room code is all it takes to ask your device for a connection, so
+share it only with the people you invite. Guarding against someone who
+knows it anyway:
+
+- A player coming back to their seat proves it without sending the seat's
+  secret over the internet: the proof is good for that one connection
+  only. If someone took your room's name at the meeting service while your
+  connection there was being made again, they learn nothing that gets
+  them a seat, and your app takes the name back once it is free.
+- A flood of made-up connection requests can keep new friends from
+  joining over the internet for a while, but not players coming back to
+  their seats, and never the same Wi-Fi. Connections that don't join a
+  room within 15 seconds are closed. If it keeps happening, create a new
+  room (it gets a new code).
+
+**If a helper goes away** (these are free services with no guarantee):
+the lobby says **Internet: not available (no connection)**, and friends
+elsewhere can't join new rooms until it is back. Games already going keep
+playing, since they don't go through it, and the same Wi-Fi keeps working
+(in a browser too, through the invite page's **on the same Wi-Fi as the
+host** button, when the host's app includes the browser version).
+The app could switch to another meeting service later without changing how
+you play.
 
 ## 5. Host from a phone
 
@@ -358,16 +357,17 @@ Android phones and tablets, iPhones and iPads can host too, the same way:
   itself while you host; plug the phone in. If the app goes to the
   background or the phone locks, the room stops: players see
   "Reconnecting…" and, if you don't come back, "The host closed the room".
-- Connect the phone to **Wi-Fi**. On mobile data, friends on the internet
-  can't join (see [CGNAT](#4-when-internet-play-isnt-available)).
+- Connect the phone to **Wi-Fi** if you can. On mobile data, friends
+  elsewhere often can't connect directly (see
+  [When a direct connection isn't possible](#3-when-a-direct-connection-isnt-possible)),
+  and friends nearby can't reach you over the Wi-Fi.
 - **iPhone and iPad**: allow **Local Network** when iOS asks, or friends on
   the Wi-Fi can't connect (to fix it later: Settings > Privacy & Security >
-  Local Network > PokerFection). The automatic router setup doesn't work
-  there (Apple doesn't allow it without a special permission): open the
-  port by hand if you need it. Finding the room by its code alone may not
-  work either: send the invite.
-- Phones don't serve the browser version: friends need the app (or host on
-  Windows for browser friends).
+  Local Network > PokerFection). Finding the room by its code alone on the
+  Wi-Fi may not work there either: the code still works through the meeting
+  service, or send the invite.
+- Phones don't serve the browser version: browser friends use the
+  website's **Play in this browser** from the invite.
 - A phone hosting 8 players with GTO help solves a lot: help may come a
   little late. A PC is the better host for big tables.
 
@@ -376,8 +376,20 @@ Android phones and tablets, iPhones and iPads can host too, the same way:
 ### "Room not found"
 
 - Check the code (letters and digits, no I, L, O, 0 or 1).
-- Are you on the same Wi-Fi as the host? If not, you need the invite.
 - Is the host still in the room? The room ends when the host leaves.
+- Does the host's lobby say **Internet: ready**? If not, only friends on
+  the host's Wi-Fi can join.
+
+### "Can't connect directly to the host from this network"
+
+The room is there, but your network and the host's won't let the two
+devices connect directly. See
+[When a direct connection isn't possible](#3-when-a-direct-connection-isnt-possible).
+
+### "Can't find the room: check the code and your internet"
+
+The room isn't on your Wi-Fi, and the meeting service couldn't be asked:
+check your internet connection, or ask the host for the invite.
 
 ### Friends on the same Wi-Fi can't connect
 
@@ -395,9 +407,12 @@ Android phones and tablets, iPhones and iPads can host too, the same way:
 
 ### "Internet: not available"
 
-See [Friends on the internet](#friends-on-the-internet),
-[Open the port by hand](#3-open-the-port-by-hand) and
-[When internet play isn't available](#4-when-internet-play-isnt-available).
+- *(no connection)*: the host has no internet, or the meeting service
+  can't be reached right now. The app keeps trying by itself; friends on
+  the same Wi-Fi can still join.
+- *(busy: create a new room)*: the meeting service couldn't give the room
+  a name (someone else holds that code there). Close the room and create a
+  new one (it gets another code).
 
 ### "Reconnecting…"
 
@@ -418,7 +433,10 @@ Wi-Fi hiccups happen. A player whose connection drops keeps their seat for
 
 If the **host's** connection drops, the bots only check or fold (and the
 game waits between hands) until the host is back; if the host isn't back
-within 2 minutes, the room closes.
+within 2 minutes, the room closes. A friend who joined from elsewhere sees
+"The host closed the room" only after the room has been missing at the
+meeting service for 45 seconds, since the host's connection to it may just
+be coming back.
 
 ### Other messages
 
@@ -440,12 +458,17 @@ within 2 minutes, the room closes.
 
 From the project folder, `dart run tool/host_check.dart` does what Create
 Room does on this computer: it starts a room, joins it at every address the
-invite would carry (and by the code alone), reports how the router setup
-went, checks the browser version is served, deals a hand and closes the
-room. `dart run tool/host_check.dart --no-router` does the same without
-asking the router to open a port; it checks a public address set by hand
-goes in the invite instead. The first time, Windows Firewall may ask about
-Dart: allow it.
+invite would carry (and by the code alone), reports whether the router
+opened the port, checks the browser version is served, deals a hand and
+closes the room. `dart run tool/host_check.dart --no-router` does the same
+without asking the router to open a port. The first time, Windows Firewall
+may ask about Dart: allow it.
+
+Run with plain Dart, the check can't make direct connections (they need the
+app's WebRTC): it reports the meeting service as not available on this
+device, and its invite names no room there. To check direct connections
+through the real public helpers, run the app's live test:
+`flutter test integration_test/peer_live_test.dart -d windows --dart-define=PEER_LIVE=1`.
 
 ## Running the server on your own computer
 
@@ -491,9 +514,11 @@ To play on it:
 3. The others join with the room code.
 
 What applies to a host's device applies to that computer too: the firewall
-must allow it (on Windows, allow `dart.exe` or your compiled program), and
-for friends on the internet the router must forward the port to it (by
-hand: this server doesn't ask the router).
+must allow it (on Windows, allow `dart.exe` or your compiled program). This
+server takes WebSocket connections only, with no meeting service: for
+players on the internet, the computer must be reachable at a public
+address (its router forwarding the port to it, which this server doesn't
+set up).
 
 Good to know:
 

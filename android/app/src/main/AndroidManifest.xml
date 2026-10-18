@@ -3,6 +3,15 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- A room hosted here hears friends looking for it by its code (Wi-Fi broadcasts). -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+    <!-- Direct connections to friends (WebRTC) follow the phone's networks as
+         they change (Wi-Fi, mobile data); without this WebRTC can't watch them.
+         Granted at install, nothing is asked. No camera or microphone: only
+         text goes over these connections. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- The WebRTC plugin brings a Bluetooth permission for calls (unused here:
+         no audio); without this, the Play Store would hide the app from
+         devices without Bluetooth. -->
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
     <application
         android:label="PokerFection"
         android:name="${applicationName}"

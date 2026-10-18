@@ -12,6 +12,7 @@ import '../../online/host_here.dart';
 import '../../online/invite.dart';
 import '../../online/online_client.dart';
 import '../../online/online_socket.dart';
+import '../../online/peer_config.dart' show peerEntry;
 import '../../online/protocol.dart';
 import '../../online/room_host.dart';
 import '../glossary.dart';
@@ -22,23 +23,42 @@ import 'lobby_screen.dart';
 /// there is one.
 ///
 /// Create Room runs the room on this device (the game server inside the
-/// app); the web version can't, so there it only joins. Join Room tries the
-/// invite's addresses in order (the host's on the same network first), else
-/// looks for the room on the local network. An invite (a link that opened
-/// the app, or one pasted) fills in the code and the addresses. The server
-/// can be set by hand (a server of your own, see bin/server.dart): then
-/// rooms are created and joined there.
+/// app, and the room's code taken at the meeting service so friends
+/// anywhere can come in); in a browser, the room runs in the page and
+/// everyone comes in through the meeting service (greyed out where the
+/// browser can't make direct connections). Join Room tries the invite's
+/// ways in in order (the host's addresses on the same network first, then
+/// the room through the meeting service when the invite names it, minus
+/// those the page can't open); with just a code, it looks for the room on
+/// the local network, then through the meeting service, wherever its host
+/// is. An invite (a link that opened the app, or one pasted) fills in the
+/// code and the ways in. The server can be set by hand (a server of your
+/// own, see bin/server.dart): then rooms are created and joined there.
 ///
 /// When the app closed (or the page reloaded) during a game, Rejoin Room
 /// takes the player back to their seat, if the room kept it.
 class OnlineScreen extends StatefulWidget {
-  const OnlineScreen({super.key, this.connect, this.invite});
+  const OnlineScreen({super.key, this.connect, this.invite, this.startHost, this.findNearby, this.page});
 
   /// The invite the app was opened with.
   final Invite? invite;
 
-  /// Opens the connection to the server (a WebSocket by default).
+  /// Opens the connection to the server (connectAny by default: a WebSocket,
+  /// or a direct connection for a room reached through the meeting service).
   final Future<OnlineSocket> Function(String url)? connect;
+
+  /// Starts hosting a room on this device (hostHere by default); tests host
+  /// on fakes.
+  final Future<RoomHost> Function()? startHost;
+
+  /// The game servers on the local network that have a room (findRoomNearby
+  /// by default); tests answer for the network.
+  final Future<List<String>> Function(String code)? findNearby;
+
+  /// The address of the page the web version runs at (Uri.base by default
+  /// there; none in the apps): what it may connect to depends on it. Tests
+  /// give one.
+  final Uri? page;
 
   @override
   State<OnlineScreen> createState() => _OnlineScreenState();
@@ -75,6 +95,9 @@ class _OnlineScreenState extends State<OnlineScreen> {
 
   /// A room is created on the server set by hand, else on this device.
   bool get _canCreate => canHostHere || _server.text.trim().isNotEmpty;
+
+  /// The page the web version runs at; null in the apps.
+  Uri? get _page => widget.page ?? (kIsWeb ? Uri.base : null);
 
   /// The one button: create a room, or join the one in the code box (back
   /// to the seat kept there, if this device was just in that room: the app
@@ -152,7 +175,12 @@ class _OnlineScreenState extends State<OnlineScreen> {
       if (mounted) {
         setState(() {
           _busy = null;
-          _error = e.error == null && unreachable != null ? unreachable : s.joinError(e.error);
+          _error = switch (e) {
+            // The host is there, but this network can't reach it directly: what to try instead.
+            OnlineFailure(noDirectRoute: true) => s.noDirectRoute,
+            OnlineFailure(error: null) when unreachable != null => unreachable,
+            _ => s.joinError(e.error),
+          };
         });
       }
       return;
@@ -166,7 +194,8 @@ class _OnlineScreenState extends State<OnlineScreen> {
   }
 
   /// Creates a room: on the server set by hand, else on this device (the
-  /// game server starts inside the app, and this app joins it).
+  /// game server starts inside the app, the room's code is taken at the
+  /// meeting service, and this app joins it).
   Future<void> _create() async {
     final s = S.of(context);
     final name = _checkName();
@@ -180,6 +209,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
       return _open(
         OnlineClient(server, onRecord: AppSettings.of(context).remember, connect: widget.connect),
         CreateRoom(name: name),
+        unreachable: _blockedHere(server) ? s.wsOnWebsite : s.cantReachServer,
       );
     }
     setState(() {
@@ -188,7 +218,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
     });
     final RoomHost host;
     try {
-      host = await hostHere();
+      host = await (widget.startHost ?? hostHere)();
     } on Object {
       if (mounted) {
         setState(() {
@@ -203,14 +233,13 @@ class _OnlineScreenState extends State<OnlineScreen> {
       unawaited(host.stop());
       return;
     }
-    // The public address typed last time (for a router that isn't opened automatically).
-    host.byHand = parsePublicAddress(AppSettings.of(context).publicAddress, port: host.port);
     await _open(OnlineClient(host.ownServer, host: host, connect: widget.connect), CreateRoom(name: name));
   }
 
   /// While [host] serves the room: the screen stays on and the Wi-Fi's
   /// broadcasts are heard (phones), and closing the app closes the room
-  /// properly (everyone is told, the router's port closes).
+  /// properly (everyone is told, the room's name at the meeting service is
+  /// given back, the router's port closes).
   void _whileHosting(RoomHost host) {
     unawaited(keepScreenOn(true));
     unawaited(hearRoomSearches(true));
@@ -233,10 +262,24 @@ class _OnlineScreenState extends State<OnlineScreen> {
     );
   }
 
+  /// Whether this page may not open [server] at all: a plain ws:// one
+  /// from the website (https), which the browser refuses.
+  bool _blockedHere(String server) {
+    final page = _page;
+    return page != null && reachableFromPage([server], page).isEmpty;
+  }
+
   /// Joins the room in the code box (a code, or an invite link): at the
-  /// invite's addresses in order, at the server set by hand, at the host
-  /// that served this page (web), else wherever the room is found on the
-  /// local network; last, a room on this computer.
+  /// invite's ways in in order (the room through the meeting service among
+  /// them, when its host holds the room's name there), at the server set by
+  /// hand, at the host that served this page (web), else wherever the room
+  /// is found on the local network. With just a code (no invite, no server
+  /// set by hand), the room through the meeting service too, wherever its
+  /// host is; never when an invite left it out (its host holds no name
+  /// there: the name could be anyone's) or for a server set by hand (its
+  /// rooms aren't there). Last, a room on this computer. On the website
+  /// (https), the ws:// ones are left out: the browser would refuse them
+  /// anyway (a server set by hand that way is said to be no good here).
   Future<void> _join() async {
     final s = S.of(context);
     final invite = parseInvite(_code.text);
@@ -253,22 +296,34 @@ class _OnlineScreenState extends State<OnlineScreen> {
       _error = null;
     });
     final override = _server.text.trim();
-    final servers = [
+    final page = _page;
+    List<String> reachable(List<String> servers) => page == null ? servers : reachableFromPage(servers, page);
+    final servers = reachable([
       ...known.servers,
       if (override.isNotEmpty) override,
-      if (kIsWeb) ?pageServer(Uri.base),
-    ];
-    String? unreachable;
-    if (kIsWeb && Uri.base.scheme == 'https') {
-      // The website may not reach a room on someone's device (the browser
-      // blocks it): the host's own browser address can.
-      unreachable = s.websiteCantJoin;
-    } else if (servers.isEmpty) {
-      servers.addAll(await findRoomNearby(invite.code));
-      if (servers.isEmpty) unreachable = s.roomNotNearby;
+      if (page != null) ?pageServer(page),
+    ]);
+    String? unreachable = switch (override) {
+      '' => null,
+      _ when _blockedHere(override) => s.wsOnWebsite,
+      _ => s.cantReachServer,
+    };
+    if (servers.isEmpty) {
+      servers.addAll(await (widget.findNearby ?? findRoomNearby)(invite.code));
+      if (servers.isEmpty) unreachable ??= s.roomNotNearby;
     }
-    servers.add('ws://127.0.0.1:$gamePort/ws');
+    // Just a code: the room through the meeting service too, wherever its host is.
+    if (known.servers.isEmpty && override.isEmpty) servers.add(peerEntry(invite.code));
+    servers.addAll(reachable(['ws://127.0.0.1:$gamePort/ws']));
     if (!mounted) return;
+    if (servers.isEmpty) {
+      // Nothing this page can open (the website, with only ws:// ways in).
+      setState(() {
+        _busy = null;
+        _error = unreachable ?? s.roomNotNearby;
+      });
+      return;
+    }
     await _open(
       OnlineClient(
         servers.first,
@@ -284,14 +339,24 @@ class _OnlineScreenState extends State<OnlineScreen> {
 
   /// Back to the room the app was in when it closed, with the token the
   /// room gave: the seat is the player's again if they weren't away too
-  /// long (else why not, and the room is forgotten).
+  /// long (else why not, and the room is forgotten). Where the room was
+  /// last reached first, then the other ways back (the room through the
+  /// meeting service, for a phone no longer on the host's Wi-Fi).
   Future<void> _rejoin(RejoinRecord record) {
     setState(() {
       _busy = S.of(context).connecting;
       _error = null;
     });
+    final page = _page;
+    final servers = [record.server, ...record.alsoTry];
+    final ways = page == null ? servers : reachableFromPage(servers, page);
     return _open(
-      OnlineClient(record.server, onRecord: AppSettings.of(context).remember, connect: widget.connect),
+      OnlineClient(
+        ways.firstOrNull ?? record.server,
+        alsoTry: ways.skip(1).toList(),
+        onRecord: AppSettings.of(context).remember,
+        connect: widget.connect,
+      ),
       RejoinRoom(code: record.code, token: record.token),
     );
   }
@@ -374,7 +439,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-              // A browser can't host: Create Room greyed out, and why.
+              // A browser that can't make direct connections can't host: Create Room greyed out, and why.
               if (creating && !_canCreate)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),

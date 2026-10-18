@@ -165,6 +165,7 @@ class Room {
     required this._clock,
     required this._random,
     required this._onClosed,
+    this._atMeetingService,
     void Function(String message)? log,
   }) : _settings = settings,
        _log = log ?? ((_) {}) {
@@ -182,6 +183,13 @@ class Room {
   final Random _random;
   final void Function(Room room) _onClosed;
   final void Function(String message) _log;
+
+  /// Whether the room can be reached through the meeting service now (its
+  /// host holds the room's name there); each Welcome says so. Null: never
+  /// (a server of its own).
+  final bool Function()? _atMeetingService;
+
+  bool get _peer => _atMeetingService?.call() ?? false;
 
   RoomSettings _settings;
 
@@ -272,6 +280,22 @@ class Room {
   bool get isClosed => _closed;
   RoomPhase get phase => _phase;
   bool get isPaused => _paused;
+
+  /// The tokens of the players still in the room (not left, not removed).
+  Iterable<String> get tokensSeated => [
+    for (final p in _players.values)
+      if (!p.left && !bars(token: p.token)) p.token,
+  ];
+
+  /// The token of a player still in the room (not left, not removed) that
+  /// [proves] says is proven, or null: a player coming back with a proof
+  /// of their seat rather than its token (see seat_proof.dart).
+  String? tokenProven(bool Function(String token) proves) {
+    for (final p in _players.values) {
+      if (!p.left && !bars(token: p.token) && proves(p.token)) return p.token;
+    }
+    return null;
+  }
 
   /// Whether the host removed the player with [token], or one on [device]:
   /// they can't come back.
@@ -395,7 +419,7 @@ class Room {
     _players[token] = p;
     _seats[0].token = token;
     _hostToken = token;
-    _send(p, Welcome(code: code, token: token, seat: 0, isHost: true));
+    _send(p, Welcome(code: code, token: token, seat: 0, isHost: true, peer: _peer));
     _sendRoom();
     _watchIdle();
     return p;
@@ -416,7 +440,7 @@ class Room {
     } else {
       p.waiting = true;
     }
-    _send(p, Welcome(code: code, token: token, seat: seat, isHost: false, waiting: p.waiting));
+    _send(p, Welcome(code: code, token: token, seat: seat, isHost: false, waiting: p.waiting, peer: _peer));
     _sendRoom();
     _sendChat(p);
     _guarded(_watchIdle);
@@ -452,7 +476,7 @@ class Room {
     if (token == _hostToken && hand != null && !hand.isOver && !_dealing) _botDriver = link;
     // Their clock (or with the host back, a bot's) starts again: before the snapshot, which tells the time left.
     _guarded(() => _restartClockFor(p));
-    _send(p, Welcome(code: code, token: token, seat: p.seat, isHost: token == _hostToken, waiting: p.waiting));
+    _send(p, Welcome(code: code, token: token, seat: p.seat, isHost: token == _hostToken, waiting: p.waiting, peer: _peer));
     _sendRoom();
     _sendSnapshot(p);
     _sendChat(p);

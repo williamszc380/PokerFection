@@ -27,7 +27,7 @@ void main() {
       clock: clock,
       random: Random(1),
       connect: (_) async {
-        final (server, device) = MemoryLink.pair();
+        final (server, device) = MemoryLink.pair(record: true);
         registry.accept(server);
         return link = device;
       },
