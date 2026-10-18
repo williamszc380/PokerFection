@@ -16,6 +16,8 @@
 // reload (start it again to pick up changes).
 import 'dart:io';
 
+import 'build_label.dart';
+
 /// Options that show [_help] instead of starting the game. They take the
 /// place of `flutter run`'s own -h, which `flutter run -h` still shows.
 const _helpOptions = {'-h', '--help'};
@@ -91,7 +93,16 @@ Future<void> main(List<String> args) async {
   try {
     flutter = await Process.start(
       'flutter',
-      ['run', '-d', device, if (profile != null) '--dart-entrypoint-args=$profile', ...rest],
+      [
+        'run',
+        '-d',
+        device,
+        if (profile != null) '--dart-entrypoint-args=$profile',
+        // The main menu's corner shows which code this is (unless set by hand).
+        if (!rest.any((a) => a.startsWith('--dart-define=$buildLabelDefine=')))
+          ...buildLabelOptions(await buildLabel()),
+        ...rest,
+      ],
       mode: ProcessStartMode.inheritStdio,
       runInShell: Platform.isWindows,
     );

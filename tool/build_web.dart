@@ -13,6 +13,8 @@
 //     the app; this also copies it into the Windows builds there are now.
 import 'dart:io';
 
+import 'build_label.dart';
+
 Future<void> main(List<String> args) async {
   final host = args.contains('--host');
   final output = host ? 'build/web_host' : 'build/web';
@@ -25,6 +27,8 @@ Future<void> main(List<String> args) async {
     '--release',
     '--wasm',
     '--dart-define=SOLVER_WORKER_BUILD=$build',
+    // The main menu's corner shows which code this is.
+    ...buildLabelOptions(await buildLabel()),
     if (host) ...['--no-web-resources-cdn', '--output', Directory(output).absolute.path],
     ...options,
   ]);

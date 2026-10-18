@@ -64,6 +64,11 @@ void main() {
     await tester.pumpWidget(PokerFectionApp(settings: AppSettings()));
     expect(find.byType(LogoMark), findsOneWidget);
     expect(find.text('English'), findsOneWidget, reason: 'the language button');
+    // The version in the bottom-right corner ("dev": tests aren't built by ./run).
+    final version = find.byKey(const ValueKey('version'));
+    expect(tester.widget<Text>(version).data, 'dev');
+    expect(tester.getBottomRight(version).dx, greaterThan(800 - 40));
+    expect(tester.getBottomRight(version).dy, greaterThan(1400 - 40));
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Sound'), findsOneWidget);

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app/app_settings.dart';
+import '../app/build_info.dart';
 import '../app/drills.dart';
 import '../l10n/strings.dart';
 import 'charts_screen.dart';
@@ -18,7 +19,8 @@ import 'widgets/logo.dart';
 /// and Settings, with the language in the top corner. Play and Guides open
 /// their choices right under them: the menu always keeps room for one row
 /// of choices at its bottom, so opening one only slides the buttons below
-/// it down, and nothing above moves.
+/// it down, and nothing above moves. The version shows in the bottom-right
+/// corner (build_info.dart).
 class MainMenu extends StatefulWidget {
   const MainMenu({super.key});
 
@@ -167,42 +169,60 @@ class _MainMenuState extends State<MainMenu> {
       ),
       extendBodyBehindAppBar: true,
       body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Phones held sideways: the logo beside the buttons.
-            if (constraints.maxWidth > constraints.maxHeight && constraints.maxHeight < 520) {
-              return Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const LogoMark(size: 190, name: true),
-                    const SizedBox(width: 48),
-                    SizedBox(width: 280, child: buttons),
-                  ],
-                ),
-              );
-            }
-            return Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 360),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Center(child: LogoMark(size: 220, name: true)),
-                      const SizedBox(height: 32),
-                      buttons,
-                    ],
-                  ),
-                ),
+        child: Stack(
+          children: [
+            Positioned.fill(child: _menu(buttons)),
+            // Which version this is, to compare copies of the game (the app
+            // and the website, say): see build_info.dart.
+            Positioned(
+              right: 12,
+              bottom: 8,
+              child: Text(
+                buildLabel,
+                key: const ValueKey('version'),
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white38),
               ),
-            );
-          },
+            ),
+          ],
         ),
       ),
     );
   }
+
+  /// The logo and [buttons], centered.
+  Widget _menu(Widget buttons) => LayoutBuilder(
+        builder: (context, constraints) {
+          // Phones held sideways: the logo beside the buttons.
+          if (constraints.maxWidth > constraints.maxHeight && constraints.maxHeight < 520) {
+            return Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const LogoMark(size: 190, name: true),
+                  const SizedBox(width: 48),
+                  SizedBox(width: 280, child: buttons),
+                ],
+              ),
+            );
+          }
+          return Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Center(child: LogoMark(size: 220, name: true)),
+                    const SizedBox(height: 32),
+                    buttons,
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
 }
 
 /// Picks the app's language (top corner of the main menu).
