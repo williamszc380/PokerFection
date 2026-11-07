@@ -204,6 +204,10 @@ class OnlineClient {
   /// address stops working.
   String? _home;
 
+  /// The app's key this member joined with (see JoinRoom.device): a
+  /// spectator who joins again ([_comeBack]) gives it again.
+  String? _device;
+
   final StreamController<void> _changes = StreamController.broadcast();
   Stream<void> get changes => _changes.stream;
 
@@ -246,8 +250,27 @@ class OnlineClient {
 
   bool get isHost => welcome?.isHost ?? false;
 
-  /// This player's seat at the server.
-  int? get mySeat => room?.you ?? welcome?.seat;
+  /// This member as the room last listed them (null before the room says).
+  RoomMember? get myMember => room?.me;
+
+  /// This member watches: no seat, or only waiting for one (the seat is
+  /// theirs from the next hand: until then they get the spectator's view,
+  /// see RoomMember.spectator). True until the room says otherwise.
+  bool get isSpectator => myMember?.spectator ?? true;
+
+  /// This member's seat, once it is theirs: null for a spectator, and for
+  /// a member only waiting for a seat ([queuedSeat]), which may still be a
+  /// leaving player's or a bot's that gives way until the hand ends.
+  int? get mySeat => switch (myMember) {
+    RoomMember(:final seat?, waiting: false) => seat,
+    _ => null,
+  };
+
+  /// The seat this member waits for (theirs from the next hand), if any.
+  int? get queuedSeat => switch (myMember) {
+    RoomMember(:final seat?, waiting: true) => seat,
+    _ => null,
+  };
 
   /// Connects and sends [opening] (a [CreateRoom], [JoinRoom] or
   /// [RejoinRoom]), trying each server in turn while they can't be reached
@@ -258,6 +281,7 @@ class OnlineClient {
   /// the room's name at the meeting service), else can't connect.
   Future<Welcome> open(ClientMessage opening) async {
     if (opening is RejoinRoom && opening.proof == null) _seat = opening.token;
+    if (opening is JoinRoom) _device = opening.device;
     var failure = const OnlineFailure();
     for (final server in _servers) {
       try {
@@ -565,7 +589,7 @@ class OnlineClient {
       for (final (i, server) in _waysBack(welcome).indexed) {
         if (status != OnlineStatus.reconnecting) return;
         try {
-          await _openAt(server, RejoinRoom(code: welcome.code, token: welcome.token));
+          await _comeBack(server, welcome);
           // Back: the room and a snapshot follow.
           noDirectRoute = false;
           return;
@@ -607,6 +631,21 @@ class OnlineClient {
     }
     _remember(null);
     _changed();
+  }
+
+  /// Back into the room at [server] with the member's token. A spectator
+  /// away too long ([JoinError.seatGone]: the room let them go) joins
+  /// again by name: they had nothing to keep but their place in the room,
+  /// so there is no need to tell them (a seated player hears it). Removed
+  /// or barred, they get the room's answer either way.
+  Future<void> _comeBack(String server, Welcome welcome) async {
+    try {
+      await _openAt(server, RejoinRoom(code: welcome.code, token: welcome.token));
+    } on OnlineFailure catch (e) {
+      final me = myMember;
+      if (e.error != JoinError.seatGone || me == null || !me.spectator) rethrow;
+      await _openAt(server, JoinRoom(code: welcome.code, name: me.name, device: _device));
+    }
   }
 
   /// Every few seconds: a ping, unless the server has been silent too long

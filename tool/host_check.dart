@@ -4,8 +4,10 @@
 // went; creates a room from 127.0.0.1, then joins it as friends would: at
 // 127.0.0.1, at each local network address of the invite, by the room code
 // alone (found on the network), and at the public address when the router
-// opened the port. Then deals a hand to everyone, checks the browser
-// version is served, and closes the room as the host.
+// opened the port. Everyone enters as a spectator: they all take a seat
+// (the host too) but one, who watches. Then deals a hand to everyone (the
+// spectator sees the people's cards), checks the browser version is
+// served, and closes the room as the host.
 //
 //   dart run tool/host_check.dart [--no-router]
 //
@@ -18,6 +20,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:pokerfection/src/engine/events.dart';
 import 'package:pokerfection/src/online/host_here.dart';
 import 'package:pokerfection/src/online/invite.dart';
 import 'package:pokerfection/src/online/online_client.dart';
@@ -55,7 +58,7 @@ Future<_Player?> _join(String name, String code, List<String> servers) async {
   final client = OnlineClient(servers.first, alsoTry: servers.skip(1).toList());
   try {
     final welcome = await client.open(JoinRoom(code: code, name: name));
-    _report(true, '$name joined at ${client.url} (seat ${welcome.seat})');
+    _report(true, '$name joined at ${client.url} (member ${welcome.id}, watching)');
     return _Player(name, client);
   } on OnlineFailure catch (e) {
     _report(false, '$name could not join at ${servers.join(', ')}: $e');
@@ -90,7 +93,7 @@ Future<void> main(List<String> args) async {
   final hostClient = OnlineClient(host.ownServer, host: host);
   final Welcome welcome;
   try {
-    welcome = await hostClient.open(const CreateRoom(name: 'Host'));
+    welcome = await hostClient.open(const CreateRoom(name: 'Host', game: holdemKey));
   } on OnlineFailure catch (e) {
     _report(false, 'Creating the room failed: $e');
     await host.stop();
@@ -131,7 +134,7 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  // A wrong code is refused; a full table too.
+  // A wrong code is refused.
   final wrong = OnlineClient(host.ownServer);
   try {
     await wrong.open(const JoinRoom(code: 'ZZZZZ', name: 'Nobody'));
@@ -158,6 +161,11 @@ Future<void> main(List<String> args) async {
         'solver_worker.mjs',
         'solver_worker.wasm',
         'solver_worker.js',
+        // The other games' coaches and bots (lib/game_worker.dart).
+        'game_worker_wasm.js',
+        'game_worker.mjs',
+        'game_worker.wasm',
+        'game_worker.js',
       ]) {
         final response = await (await http.headUrl(Uri.parse('http://$address:${host.port}/$file'))).close();
         await response.drain<void>();
@@ -170,15 +178,29 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  // Everyone sees the others; the host deals a hand to all.
-  final seated = players.length;
+  // Everyone came in watching; all take a seat (as many as the table has),
+  // the host too, but one more friend, who stays a spectator.
+  final watcher = await _join('Watcher', code, ['ws://127.0.0.1:${host.port}/ws']);
+  final seated = players.take(const RoomSettings().seats).toList();
+  for (final p in seated) {
+    p.client.send(const TakeSeat());
+  }
   _report(
-    await hostPlayer.waitFor((m) => m is RoomState && m.taken == seated),
-    'The host sees all $seated players seated',
+    await hostPlayer.waitFor((m) => m is RoomState && m.taken == seated.length),
+    'The host sees ${seated.length} players seated',
   );
   hostClient.send(const StartGame());
-  for (final p in players) {
+  for (final p in seated) {
     _report(await p.waitFor((m) => m is HandDealt, within: const Duration(seconds: 20)), '${p.name} was dealt a hand');
+  }
+  if (watcher != null) {
+    // The spectator watches the same hand, with every person's cards.
+    final watched = await watcher.waitFor(
+      (m) => m is HandDealt && m.batch.whereType<HoleCardsDealt>().single.cards.length == seated.length,
+      within: const Duration(seconds: 20),
+    );
+    _report(watched, 'Watcher watches the hand with all ${seated.length} hands showing');
+    players.add(watcher);
   }
 
   // The host leaves: the room closes for everyone and the server stops.

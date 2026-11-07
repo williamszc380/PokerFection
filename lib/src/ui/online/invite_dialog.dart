@@ -1,6 +1,6 @@
-/// Inviting friends to a room, from the lobby and from the table (☰ >
-/// Table): the invite to send, and for a room hosted on this device which
-/// ways in work.
+/// Inviting friends to a room, from the room's panel (docked, or the Room
+/// tab at the table): the invite to send, and for a room hosted on this
+/// device which ways in work.
 library;
 
 import 'package:flutter/foundation.dart';
@@ -12,6 +12,7 @@ import '../../online/invite.dart';
 import '../../online/online_client.dart';
 import '../../online/room_host.dart';
 import '../glossary.dart';
+import 'room_scope.dart';
 
 /// Copies [text] and says so; false if not allowed (a browser on a host's
 /// http page may refuse: the text is selectable to copy by hand then).
@@ -47,7 +48,8 @@ Future<void> showInvite(BuildContext context, OnlineClient client, String code) 
   final s = S.of(context);
   final host = client.host;
   return showDialog<void>(
-    context: context,
+    // From the docked room: over the screen beside it.
+    context: roomDialogContext(context),
     builder: (context) => StreamBuilder<void>(
       stream: host?.changes,
       builder: (context, _) {

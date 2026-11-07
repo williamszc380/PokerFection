@@ -12,7 +12,19 @@
 /// gives the room seat of each hand seat; every message about a hand uses
 /// hand seats.
 ///
-/// A player whose connection drops keeps their seat for a while
+/// A room starts with no game: no seats, only its members and the chat.
+/// The host picks one in the lobby ([ChooseGame]), and its seats come with
+/// it; picking another sends everyone back to watching.
+///
+/// Everyone enters a room as a spectator, the host too ([Welcome.id] is
+/// their member id; [RoomState.members] lists everyone). A member takes a
+/// seat with [TakeSeat] and gives it up with [LeaveSeat]: at once in the
+/// lobby, while the game waits for players and between hands; during a
+/// hand, from the next one. A spectator sees every person's hole cards,
+/// and the bots' only when the host allows it ([HostSettings.seeBots]); a
+/// seat sees only its own.
+///
+/// A member whose connection drops keeps their place for a while
 /// ([OnlineTiming.hold]): their device comes back with [RejoinRoom] and the
 /// token it was given, and gets a [Snapshot] of the hand to catch up.
 ///
@@ -28,10 +40,14 @@
 /// A player may sit out ([SitOut]): they keep their seat and chips but
 /// aren't dealt in (they watch, like a player out of chips) until they are
 /// back; the server sits out a player who was away through a whole hand,
-/// until they come back. The host may remove a player ([RemovePlayer]): they
+/// until they come back. The host may remove a member ([RemoveMember]): they
 /// are told why the room ended for them ([CloseReason.removed]), everyone
 /// else is told ([PlayerRemoved]), and the room won't let them in again
 /// ([JoinError.removed]).
+///
+/// The games other than Hold'em travel in one envelope, `{t:"g", game, gv,
+/// m}` ([GameMessage], [ServerGameMessage]; the "m" kinds are in
+/// games/game_envelope.dart).
 library;
 
 import 'dart:convert';
@@ -40,12 +56,20 @@ import '../engine/actions.dart';
 import '../engine/cards.dart';
 import '../engine/events.dart';
 import '../engine/rules.dart';
+import '../kit/game_keys.dart';
 import 'event_codec.dart';
+import 'games/game_envelope.dart';
 import 'timing.dart';
 
 /// The version of these messages. A device with another one can't join,
 /// nor one with other betting rules ([rulesVersion]).
-const protocolVersion = 7;
+const protocolVersion = 8;
+
+/// Hold'em's key among the games a room can play (the others are
+/// GameKeys'), and its version in [RoomState.games]: its messages are the
+/// ones in this file.
+const holdemKey = 'holdem';
+const holdemGv = 1;
 
 /// The port a game server listens on unless told otherwise (a host's app
 /// takes one of the next few when it is taken). Also where hosts answer
@@ -66,6 +90,10 @@ const minPlayers = 2;
 /// host's device and kept secret).
 const botStyleNames = ['random', 'gto', 'tag', 'lag', 'station', 'nit'];
 
+/// The bots' levels in the other games (a table refuses a style or level
+/// that isn't its game's).
+const botLevelNames = envelopeBotLevels;
+
 /// The style a bot the host adds starts with.
 const defaultBotStyle = 'gto';
 
@@ -80,8 +108,20 @@ enum Rejection { stale, notYourTurn, illegal, notHost, badMessage, rateLimited }
 /// Why creating, joining or rejoining a room failed (the connection then
 /// closes): [roomGone] when the room closed while the device was away,
 /// [seatGone] when it was away too long and someone else may have the seat,
-/// [removed] when the host removed this player (or this device's) from it.
-enum JoinError { upgrade, roomNotFound, tableFull, rateLimited, serverFull, internal, roomGone, seatGone, removed }
+/// [removed] when the host removed this player (or this device's) from it,
+/// [roomFull] when the room has as many members as it takes (its host's
+/// device sets how many: see RoomRegistry.roomCap).
+enum JoinError {
+  upgrade,
+  roomNotFound,
+  roomFull,
+  rateLimited,
+  serverFull,
+  internal,
+  roomGone,
+  seatGone,
+  removed,
+}
 
 /// Why the server ends a connection, or the whole room ([removed]: the host
 /// removed this player).
@@ -97,9 +137,8 @@ enum SeatKind { human, bot, empty }
 /// from the next hand.
 enum SeatStatus { connected, away, left }
 
-/// What everyone at the table is told about: a player pressed Show GTO,
-/// or looked at another player's cards.
-enum NoticeKind { help, peek }
+/// What everyone in the room is told about: a player pressed Show GTO.
+enum NoticeKind { help }
 
 /// Who chose an action: the player (or for a bot, the host's device), or
 /// the server, when time ran out, the player was away or had left, or the
@@ -172,7 +211,6 @@ class RoomSettings {
     this.help = HelpLevel.none,
     this.turnLimit = OnlineTiming.defaultTurnLimit,
     this.showStyles = false,
-    this.showCards = false,
   });
 
   /// Seats at the table, 2 to 8: the most players. Seats nobody takes
@@ -197,12 +235,9 @@ class RoomSettings {
   /// [OnlineTiming.turnLimits]).
   final int turnLimit;
 
-  /// Everyone sees the bots' styles (the host always does).
+  /// Everyone seated sees the bots' styles (the host and spectators always
+  /// do).
   final bool showStyles;
-
-  /// Players may look at another player's cards during a hand (everyone
-  /// is told when they do).
-  final bool showCards;
 
   int get startingStack => stackBb * onlineBigBlind;
 
@@ -226,7 +261,6 @@ class RoomSettings {
     HelpLevel? help,
     int? turnLimit,
     bool? showStyles,
-    bool? showCards,
   }) => RoomSettings(
     seats: seats ?? this.seats,
     stackBb: stackBb ?? this.stackBb,
@@ -237,7 +271,6 @@ class RoomSettings {
     help: help ?? this.help,
     turnLimit: turnLimit ?? this.turnLimit,
     showStyles: showStyles ?? this.showStyles,
-    showCards: showCards ?? this.showCards,
   );
 
   @override
@@ -246,12 +279,10 @@ class RoomSettings {
       sameTable(other) &&
       help == other.help &&
       turnLimit == other.turnLimit &&
-      showStyles == other.showStyles &&
-      showCards == other.showCards;
+      showStyles == other.showStyles;
 
   @override
-  int get hashCode =>
-      Object.hash(seats, stackBb, ante, raiseRule, resetStacks, rebuys, help, turnLimit, showStyles, showCards);
+  int get hashCode => Object.hash(seats, stackBb, ante, raiseRule, resetStacks, rebuys, help, turnLimit, showStyles);
 
   Map<String, Object?> toJson() => {
     'seats': seats,
@@ -263,9 +294,12 @@ class RoomSettings {
     'help': help.name,
     'turnLimit': turnLimit,
     'showStyles': showStyles,
-    'showCards': showCards,
+    // v7 read it (players looking at others' cards, gone in v8): still
+    // written, so a v7 host reads a v8 app's CreateRoom and answers upgrade.
+    'showCards': false,
   };
 
+  /// Read strictly; `showCards` (v7) is not read.
   factory RoomSettings.fromJson(Object? json) {
     final m = _Json(json);
     final turnLimit = m.integer('turnLimit');
@@ -280,7 +314,6 @@ class RoomSettings {
       help: m.named('help', HelpLevel.values),
       turnLimit: turnLimit,
       showStyles: m.boolean('showStyles'),
-      showCards: m.boolean('showCards'),
     );
   }
 }
@@ -298,6 +331,8 @@ class SeatInfo {
     this.out = false,
     this.sittingOut = false,
     this.chips,
+    this.member,
+    this.score,
   });
 
   /// The room seat.
@@ -308,15 +343,17 @@ class SeatInfo {
   final String name;
   final SeatStatus status;
 
-  /// A bot's style (see [botStyleNames]); only sent to the host, or to
-  /// everyone when styles are shown.
+  /// A bot's style (see [botStyleNames], or a level in the other games: see
+  /// [botLevelNames]); only sent to the host and spectators, or to everyone
+  /// when styles are shown.
   final String? style;
 
   /// The name of a person (or bot) who takes this seat from the next hand.
   final String? joining;
 
-  /// The host took this bot away, or removed this player (who leaves when
-  /// the hand ends): the seat is empty from the next hand.
+  /// The host took this bot away (or a person takes its seat), or this
+  /// player leaves the seat, left or was removed (when the hand ends): the
+  /// seat is someone else's, or empty, from the next hand.
   final bool leaving;
 
   /// Out of chips: not dealt in (a person watches) until they rebuy or the
@@ -332,6 +369,13 @@ class SeatInfo {
   /// seats not in the hand being played: those who sit out, or come back.
   final int? chips;
 
+  /// The member id of the person here ([RoomMember.id]); null for a bot or
+  /// an empty seat.
+  final int? member;
+
+  /// The seat's score in this game so far (the games other than Hold'em).
+  final num? score;
+
   bool get isEmpty => kind == SeatKind.empty;
 
   Map<String, Object?> toJson() => {
@@ -345,6 +389,8 @@ class SeatInfo {
     if (out) 'out': true,
     if (sittingOut) 'sittingOut': true,
     'chips': ?chips,
+    'm': ?member,
+    'score': ?score,
   };
 
   factory SeatInfo.fromJson(Object? json) {
@@ -361,6 +407,8 @@ class SeatInfo {
       out: m.has('out') && m.boolean('out'),
       sittingOut: m.has('sittingOut') && m.boolean('sittingOut'),
       chips: m.optionalInteger('chips', min: 0),
+      member: m.has('m') ? m.memberId('m') : null,
+      score: m.has('score') ? m.number('score') : null,
     );
   }
 }
@@ -484,7 +532,13 @@ sealed class ClientMessage {
         rules: m.integer('rules'),
         name: m.name('name'),
         settings: RoomSettings.fromJson(m['settings']),
-        bots: m.has('bots') ? m.seatMap('bots', (v) => _Json.styleOf(v)) : const {},
+        game: _createGame(m),
+        // Only a room created with Hold'em has bots at once, with poker's styles.
+        bots: m.has('bots')
+            ? (m.has('game')
+                  ? m.seatMap('bots', (v) => _Json.pokerStyleOf(v))
+                  : throw const ProtocolError('Bots without a game'))
+            : const {},
       ),
       'join' => JoinRoom(
         version: m.integer('v'),
@@ -514,7 +568,6 @@ sealed class ClientMessage {
       'addBot' => AddBot(style: m.style('style'), seat: m.has('s') ? m.seat('s') : null),
       'removeBot' => RemoveBot(m.seat('s')),
       'usedHelp' => UsedHelp(hand: m.integer('hand', min: 1), turnId: m.integer('turnId', min: 1)),
-      'peek' => Peek(hand: m.integer('hand', min: 1), seat: m.seat('s')),
       'show' => ShowCards(hand: m.integer('hand', min: 1)),
       'act' => Act(
         hand: m.integer('hand', min: 1),
@@ -530,7 +583,20 @@ sealed class ClientMessage {
       'ready' => Ready(m.integer('hand', min: 1)),
       'rebuy' => const Rebuy(),
       'sitOut' => SitOut(m.boolean('on')),
-      'removePlayer' => RemovePlayer(seat: m.seat('s'), name: m.name('name')),
+      'removeMember' => RemoveMember(id: m.memberId('id'), name: m.name('name')),
+      'takeSeat' => TakeSeat(m.has('s') ? m.seat('s') : null),
+      'leaveSeat' => const LeaveSeat(),
+      'chooseGame' => ChooseGame(
+        game: m.gameKey('game', holdem: true),
+        setup: m.has('setup') ? m.object('setup')._m : null,
+      ),
+      'hostSettings' => HostSettings(seeBots: m.boolean('seeBots')),
+      'endGame' => const EndGame(),
+      'g' => GameMessage(
+        game: m.gameKey('game'),
+        gv: m.integer('gv', min: 1, max: maxGameVersion),
+        body: m.envelope('m', readClientBody),
+      ),
       'say' => Say(m.chat('text')),
       'leave' => const Leave(),
       'close' => const CloseRoom(),
@@ -540,8 +606,20 @@ sealed class ClientMessage {
   }
 }
 
-/// Opens a room: the sender becomes its host, in seat 0. The other seats
-/// are empty, but for [bots].
+/// The game a create message starts its room with: none, or Hold'em (the
+/// only one it may name).
+String? _createGame(_Json m) {
+  if (!m.has('game')) return null;
+  final game = m.gameKey('game', holdem: true);
+  return game == holdemKey ? game : throw ProtocolError('A room is not created with $game');
+}
+
+/// Opens a room: the sender becomes its host, a spectator like everyone.
+/// The room starts with no game (what the app sends): only its members and
+/// the chat, until the host picks one ([ChooseGame]), whose seats come with
+/// it. With [game] [holdemKey] it starts with Hold'em's table at once (the
+/// seats empty but for [bots]): a shortcut for tests and tools. It keeps
+/// every field v7 requires (a v7 host answers it with upgrade).
 class CreateRoom extends ClientMessage {
   const CreateRoom({
     this.version = protocolVersion,
@@ -549,15 +627,23 @@ class CreateRoom extends ClientMessage {
     required this.name,
     this.settings = const RoomSettings(),
     this.bots = const {},
+    this.game,
   });
 
   final int version;
   final int rules;
   final String name;
+
+  /// The room's Hold'em rules, until the host changes them (always sent:
+  /// v7 requires it).
   final RoomSettings settings;
 
+  /// Null: the room starts with no game; [holdemKey]: with Hold'em (no other
+  /// game may be named here).
+  final String? game;
+
   /// Bots to seat at once, with their styles, by room seat (see
-  /// [botStyleNames]). Seat 0 is the host's.
+  /// [botStyleNames]); any seat. Only with [game] [holdemKey].
   final Map<int, String> bots;
 
   @override
@@ -567,12 +653,13 @@ class CreateRoom extends ClientMessage {
     'rules': rules,
     'name': name,
     'settings': settings.toJson(),
+    'game': ?game,
     if (bots.isNotEmpty) 'bots': {for (final MapEntry(:key, :value) in bots.entries) '$key': value},
   };
 }
 
-/// Takes an empty seat in a room: at once in the lobby, from the next hand
-/// during the game.
+/// Comes into a room, as a spectator (see [TakeSeat]). Its fields are v7's
+/// (a v7 host answers it with upgrade).
 class JoinRoom extends ClientMessage {
   const JoinRoom({
     this.version = protocolVersion,
@@ -611,12 +698,8 @@ class JoinRoom extends ClientMessage {
 /// seat_proof.dart): whoever answers there may not be the room's host, and
 /// must not learn the token.
 class RejoinRoom extends ClientMessage {
-  const RejoinRoom({
-    this.version = protocolVersion,
-    this.rules = rulesVersion,
-    required this.code,
-    required this.token,
-  }) : proof = null;
+  const RejoinRoom({this.version = protocolVersion, this.rules = rulesVersion, required this.code, required this.token})
+    : proof = null;
 
   /// The same, proving the seat with [proof] (seatProof of the token, for
   /// this connection) rather than naming the token.
@@ -716,18 +799,6 @@ class UsedHelp extends ClientMessage {
   Map<String, Object?> toJson() => {'t': 'usedHelp', 'hand': hand, 'turnId': turnId};
 }
 
-/// The player asks to see the cards of hand seat [seat] in hand [hand]
-/// (when the host allows it): they get [PeekCards], everyone a [Notice].
-class Peek extends ClientMessage {
-  const Peek({required this.hand, required this.seat});
-
-  final int hand;
-  final int seat;
-
-  @override
-  Map<String, Object?> toJson() => {'t': 'peek', 'hand': hand, 's': seat};
-}
-
 /// Once hand [hand] is over (until the next is dealt), the player shows
 /// their own cards to everyone: they all get [CardsShown].
 class ShowCards extends ClientMessage {
@@ -799,17 +870,92 @@ class SitOut extends ClientMessage {
   Map<String, Object?> toJson() => {'t': 'sitOut', 'on': on};
 }
 
-/// The host removes the player in room seat [seat] ([name], so nobody else
-/// is removed if the seat changed hands meanwhile): at once, or when the
+/// The host removes the member [id] ([name], so nobody else is removed if
+/// the id was misread): a spectator at once; a player at once, or when the
 /// hand they play ends. They can't join the room again.
-class RemovePlayer extends ClientMessage {
-  const RemovePlayer({required this.seat, required this.name});
+class RemoveMember extends ClientMessage {
+  const RemoveMember({required this.id, required this.name});
 
-  final int seat;
+  final int id;
   final String name;
 
   @override
-  Map<String, Object?> toJson() => {'t': 'removePlayer', 's': seat, 'name': name};
+  Map<String, Object?> toJson() => {'t': 'removeMember', 'id': id, 'name': name};
+}
+
+/// The member takes room seat [seat] (null: the first free one, else a
+/// bot's, which gives way): at once in the lobby, while the game waits for
+/// players and between hands; during a hand, from the next one (they
+/// watch it as a spectator until then).
+class TakeSeat extends ClientMessage {
+  const TakeSeat([this.seat]);
+  final int? seat;
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'takeSeat', 's': ?seat};
+}
+
+/// The member gives up their seat (or the one they wait for) and
+/// spectates: at once in the lobby, while the game waits for players and
+/// between hands; during a hand, once it ends (they play it out).
+class LeaveSeat extends ClientMessage {
+  const LeaveSeat();
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'leaveSeat'};
+}
+
+/// The host picks the room's game, in the lobby: [holdemKey] (its rules
+/// are [RoomSettings]) or a GameKeys key with its [setup]: `{"seats": n,
+/// "turnLimit": s, "rules": {...}}` (read strictly by the game's
+/// OnlineGame). Another game sends every seated member back to spectating;
+/// the same one again changes only its rules. Refused while there is no
+/// game: everything about seats and the table (illegal), and moves (stale).
+class ChooseGame extends ClientMessage {
+  const ChooseGame({required this.game, this.setup});
+
+  final String game;
+  final Map<String, Object?>? setup;
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'chooseGame', 'game': game, 'setup': ?setup};
+}
+
+/// The host's switches, at any time: spectators see the bots' hidden
+/// cards ([seeBots]), from the next round.
+class HostSettings extends ClientMessage {
+  const HostSettings({required this.seeBots});
+  final bool seeBots;
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'hostSettings', 'seeBots': seeBots};
+}
+
+/// The host ends the game: back to the lobby now between rounds (or while
+/// the game waits for players), else once the round being played ends.
+class EndGame extends ClientMessage {
+  const EndGame();
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'endGame'};
+}
+
+/// The highest game version ([GameMessage.gv]) read.
+const maxGameVersion = 1000;
+
+/// A message of the games other than Hold'em: [game] (a GameKeys key) at
+/// version [gv], with its [body] (a move, a bot's move or ready: see
+/// game_envelope.dart). The room refuses it as stale unless [game] and
+/// [gv] are the room's.
+class GameMessage extends ClientMessage {
+  const GameMessage({required this.game, required this.gv, required this.body});
+
+  final String game;
+  final int gv;
+  final EnvelopeBody body;
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'g', 'game': game, 'gv': gv, 'm': body.toJson()};
 }
 
 /// Says [text] to everyone in the room (read with [cleanChat]; at most
@@ -822,7 +968,7 @@ class Say extends ClientMessage {
   Map<String, Object?> toJson() => {'t': 'say', 'text': text};
 }
 
-/// Gives up the seat now.
+/// Leaves the room now (a player's seat is given up: see Room).
 class Leave extends ClientMessage {
   const Leave();
 
@@ -866,18 +1012,22 @@ sealed class ServerMessage {
       'welcome' => Welcome(
         code: m.string('code', maxLength: 16),
         token: m.string('token', maxLength: 64),
-        seat: m.seat('s'),
+        id: m.memberId('id'),
         isHost: m.boolean('isHost'),
-        waiting: m.boolean('waiting'),
         peer: m.has('peer') && m.boolean('peer'),
       ),
       'room' => RoomState(
         code: m.string('code', maxLength: 16),
         phase: m.named('phase', RoomPhase.values),
         paused: m.has('paused') && m.boolean('paused'),
-        host: m.has('host') ? m.seat('host') : null,
-        you: m.has('you') ? m.seat('you') : null,
-        settings: RoomSettings.fromJson(m['settings']),
+        host: m.has('host') ? m.memberId('host') : null,
+        you: m.has('you') ? m.memberId('you') : null,
+        cap: m.integer('cap', min: 1, max: 64),
+        seeBots: m.boolean('seeBots'),
+        games: m.games('games'),
+        game: m.has('game') ? GameChoice._fromJson(m.object('game')) : null,
+        settings: m.has('settings') ? RoomSettings.fromJson(m['settings']) : null,
+        members: m.list('members', RoomMember.fromJson),
         seats: m.list('seats', SeatInfo.fromJson),
       ),
       'botCards' => BotCards(hand: m.integer('hand', min: 1), cards: m.seatMap('cards', _Json.holeCards)),
@@ -898,46 +1048,42 @@ sealed class ServerMessage {
         hand: m['hand'] == null ? null : SnapshotHand._fromJson(m.object('hand')),
         next: m['next'] == null ? null : NextHand._fromJson(m.object('next')),
       ),
-      'peekCards' => PeekCards(hand: m.integer('hand', min: 1), seat: m.seat('s'), cards: _Json.holeCards(m['cards'])),
       'shown' => CardsShown(hand: m.integer('hand', min: 1), seat: m.seat('s'), cards: _Json.holeCards(m['cards'])),
       'notice' => Notice(
         kind: m.named('kind', NoticeKind.values),
         hand: m.integer('hand', min: 1),
         seat: m.seat('s'),
         name: m.name('name'),
-        target: m.has('target') ? m.seat('target') : null,
-        targetName: m.has('targetName') ? m.name('targetName') : null,
       ),
       'gameOver' => GameOver(seat: m.has('s') ? m.seat('s') : null, name: m.has('name') ? m.name('name') : null),
-      'removed' => PlayerRemoved(seat: m.seat('s'), name: m.name('name')),
+      'removed' => PlayerRemoved(id: m.memberId('id'), name: m.name('name')),
       'chat' => ChatLines(m.list('lines', ChatLine.fromJson), all: m.boolean('all')),
       'rejected' => Rejected(m.named('reason', Rejection.values), turnId: m.optionalInteger('turnId')),
       'error' => ServerError(m.named('code', JoinError.values)),
       'closing' => Closing(m.named('reason', CloseReason.values)),
       'pong' => Pong(m.integer('n')),
+      'g' => ServerGameMessage(
+        game: m.gameKey('game'),
+        gv: m.integer('gv', min: 1, max: maxGameVersion),
+        body: m.envelope('m', readServerBody),
+      ),
       final type => throw ProtocolError('Unknown message $type'),
     };
   }
 }
 
-/// Who this connection is: the room, a token that proves it, the seat.
+/// Who this connection is: the room, a token that proves it, the member
+/// id (seats are in [RoomState.members]).
 class Welcome extends ServerMessage {
-  const Welcome({
-    required this.code,
-    required this.token,
-    required this.seat,
-    required this.isHost,
-    this.waiting = false,
-    this.peer = false,
-  });
+  const Welcome({required this.code, required this.token, required this.id, required this.isHost, this.peer = false});
 
   final String code;
   final String token;
-  final int seat;
-  final bool isHost;
 
-  /// Joined during the game: the seat is the player's from the next hand.
-  final bool waiting;
+  /// This member's id in the room (1, 2, 3…, never reused there): see
+  /// [RoomState.members]. Not a secret.
+  final int id;
+  final bool isHost;
 
   /// The room can be reached through the meeting service (its code is the
   /// host's name there, see peer_config.dart): a guest who came in another
@@ -950,15 +1096,77 @@ class Welcome extends ServerMessage {
     't': 'welcome',
     'code': code,
     'token': token,
-    's': seat,
+    'id': id,
     'isHost': isHost,
-    'waiting': waiting,
     if (peer) 'peer': true,
   };
 }
 
-/// Everyone at the table and the host's settings, sent again whenever
-/// anything changes.
+/// One member of a room, as everyone sees it: a spectator ([seat] null),
+/// a player in room seat [seat], or one [waiting] to take it at the next
+/// hand (a spectator until then).
+class RoomMember {
+  const RoomMember({
+    required this.id,
+    required this.name,
+    this.seat,
+    this.status = SeatStatus.connected,
+    this.waiting = false,
+  });
+
+  final int id;
+  final String name;
+  final int? seat;
+
+  /// Connected, or away (a member who left is no longer listed).
+  final SeatStatus status;
+  final bool waiting;
+
+  bool get spectator => seat == null || waiting;
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'name': name,
+    'seat': ?seat,
+    if (status != SeatStatus.connected) 'status': status.name,
+    if (waiting) 'waiting': true,
+  };
+
+  factory RoomMember.fromJson(Object? json) {
+    final m = _Json(json);
+    return RoomMember(
+      id: m.memberId('id'),
+      name: m.name('name'),
+      seat: m.has('seat') ? m.seat('seat') : null,
+      status: m.has('status') ? m.named('status', SeatStatus.values) : SeatStatus.connected,
+      waiting: m.has('waiting') && m.boolean('waiting'),
+    );
+  }
+}
+
+/// The game a room plays: [holdemKey] (its rules are [RoomState.settings]),
+/// or a GameKeys key at version [gv] with the host's [setup] (see
+/// [ChooseGame]).
+class GameChoice {
+  const GameChoice(this.key, {this.gv, this.setup});
+
+  static const holdem = GameChoice(holdemKey);
+
+  final String key;
+  final int? gv;
+  final Map<String, Object?>? setup;
+
+  Map<String, Object?> toJson() => {'key': key, 'gv': ?gv, 'setup': ?setup};
+
+  factory GameChoice._fromJson(_Json m) => GameChoice(
+    m.string('key', maxLength: 32),
+    gv: m.has('gv') ? m.integer('gv', min: 1, max: maxGameVersion) : null,
+    setup: m.has('setup') ? m.object('setup')._m : null,
+  );
+}
+
+/// Everyone in the room, the seats and the host's settings, sent again
+/// whenever anything changes.
 class RoomState extends ServerMessage {
   const RoomState({
     required this.code,
@@ -966,7 +1174,12 @@ class RoomState extends ServerMessage {
     this.paused = false,
     required this.host,
     required this.you,
-    required this.settings,
+    this.cap = 16,
+    this.seeBots = false,
+    this.games = const {holdemKey: holdemGv},
+    this.game,
+    this.settings,
+    this.members = const [],
     required this.seats,
   });
 
@@ -975,25 +1188,50 @@ class RoomState extends ServerMessage {
 
   /// During the game, between hands: fewer than [minPlayers] can play
   /// (people still connected, and bots while the host is), so no hand is
-  /// dealt until someone joins or comes back (or the host adds a bot).
+  /// dealt until someone sits down or comes back (or the host adds a bot).
   final bool paused;
 
-  /// The host's seat (its status says when the host is away; the room
-  /// closes when the host leaves).
+  /// The host's member id (its status in [members] says when the host is
+  /// away; the room closes when the host leaves).
   final int? host;
 
-  /// The seat of the player this is sent to (it can move in the lobby,
-  /// when the host takes seats away).
+  /// The member id of the member this is sent to.
   final int? you;
 
-  /// During the game, with the host's changes for the next hand.
-  final RoomSettings settings;
+  /// The most members the room takes (bots don't count).
+  final int cap;
 
-  /// Every seat of the table, by room seat (empty ones too).
+  /// The host lets spectators see the bots' cards (from the next round).
+  final bool seeBots;
+
+  /// The games this room can play, with their versions ([holdemKey]
+  /// included).
+  final Map<String, int> games;
+
+  /// The game it plays; null until the host picks one (a room starts with
+  /// no game: no seats, in the lobby).
+  final GameChoice? game;
+
+  /// Hold'em's rules, with the host's changes for the next hand during the
+  /// game; only while the game is Hold'em.
+  final RoomSettings? settings;
+
+  /// Everyone in the room, by member id.
+  final List<RoomMember> members;
+
+  /// Every seat of the table, by room seat (empty ones too); none while
+  /// there is no game.
   final List<SeatInfo> seats;
 
   /// The seats somebody (or a bot) has.
   int get taken => seats.where((s) => !s.isEmpty).length;
+
+  /// The member this is sent to.
+  RoomMember? get me => members.where((m) => m.id == you).firstOrNull;
+
+  /// The room seat of the member this is sent to (also the one they wait
+  /// for: see [RoomMember.waiting]); null for a spectator.
+  int? get yourSeat => me?.seat;
 
   @override
   Map<String, Object?> toJson() => {
@@ -1003,7 +1241,12 @@ class RoomState extends ServerMessage {
     if (paused) 'paused': true,
     'host': ?host,
     'you': ?you,
-    'settings': settings.toJson(),
+    'cap': cap,
+    'seeBots': seeBots,
+    'games': games,
+    'game': ?game?.toJson(),
+    'settings': ?settings?.toJson(),
+    'members': [for (final m in members) m.toJson()],
     'seats': [for (final s in seats) s.toJson()],
   };
 }
@@ -1078,7 +1321,6 @@ class NextHand extends ServerMessage {
     required this.seats,
     required this.help,
     required this.turnLimit,
-    this.showCards = false,
     required this.minWaitMs,
     required this.maxWaitMs,
   });
@@ -1088,8 +1330,8 @@ class NextHand extends ServerMessage {
   /// The button's hand seat.
   final int button;
 
-  /// The hand seat of the player this is sent to; null for a player out of
-  /// chips, who watches.
+  /// The hand seat of the player this is sent to; null for a spectator, or
+  /// a player not dealt in (out of chips, or sitting out), who watches.
   final int? you;
 
   /// Everyone's stack, by hand seat.
@@ -1102,8 +1344,6 @@ class NextHand extends ServerMessage {
   /// Seconds for each decision (0: no limit).
   final int turnLimit;
 
-  /// Players may look at another player's cards in this hand.
-  final bool showCards;
   final int minWaitMs;
   final int maxWaitMs;
 
@@ -1119,7 +1359,6 @@ class NextHand extends ServerMessage {
       seats: m.list('seats', SeatInfo.fromJson),
       help: m.named('help', HelpLevel.values),
       turnLimit: m.integer('turnLimit', min: 0),
-      showCards: m.boolean('showCards'),
       minWaitMs: m.integer('minWaitMs', min: 0),
       maxWaitMs: m.integer('maxWaitMs', min: 0),
     );
@@ -1141,7 +1380,6 @@ class NextHand extends ServerMessage {
     seats: seats,
     help: help,
     turnLimit: turnLimit,
-    showCards: showCards,
     minWaitMs: minWaitMs,
     maxWaitMs: maxWaitMs,
   );
@@ -1156,7 +1394,8 @@ class NextHand extends ServerMessage {
     'seats': [for (final s in seats) s.toJson()],
     'help': help.name,
     'turnLimit': turnLimit,
-    'showCards': showCards,
+    // v7 read it (looking at others' cards, gone in v8): written false.
+    'showCards': false,
     'minWaitMs': minWaitMs,
     'maxWaitMs': maxWaitMs,
   };
@@ -1166,8 +1405,9 @@ class NextHand extends ServerMessage {
 /// its copy of the hand stopped matching): the hand it is in or watches (or
 /// the last one, if the next isn't dealt yet), and the next hand if it is
 /// announced.
-/// Sent after the [Welcome] and [RoomState] of a [RejoinRoom], and for a
-/// [Resync]. A player waiting for a seat gets neither.
+/// Sent after the [Welcome] and [RoomState] of a [RejoinRoom] (and of a
+/// [JoinRoom] during the game), and for a [Resync]; to spectators too, as
+/// they may see the hand.
 class Snapshot extends ServerMessage {
   const Snapshot({this.hand, this.next});
 
@@ -1178,25 +1418,18 @@ class Snapshot extends ServerMessage {
   Map<String, Object?> toJson() => {'t': 'snapshot', 'hand': hand?.toJson(), 'next': next?.toJson()};
 }
 
-/// A hand so far, as one player may see it: the line-up it was announced
+/// A hand so far, as one member may see it: the line-up it was announced
 /// with ([lineup], waits 0), every batch of events (the deal, then one per
-/// action; only the player's own hole cards), the open turn with the time
-/// left (null once the hand is over), on the host's device the bots' cards,
-/// and the cards the player has looked at (see [Peek]).
+/// action; a player's own hole cards, or a spectator's, see redact.dart),
+/// the open turn with the time left (null once the hand is over), and on
+/// the host's device the bots' cards.
 class SnapshotHand {
-  const SnapshotHand({
-    required this.lineup,
-    required this.batches,
-    this.turn,
-    this.botCards = const {},
-    this.peeks = const {},
-  });
+  const SnapshotHand({required this.lineup, required this.batches, this.turn, this.botCards = const {}});
 
   final NextHand lineup;
   final List<List<GameEvent>> batches;
   final Turn? turn;
   final Map<int, List<PlayingCard>> botCards;
-  final Map<int, List<PlayingCard>> peeks;
 
   int get hand => lineup.hand;
 
@@ -1208,7 +1441,6 @@ class SnapshotHand {
     'batches': [for (final b in batches) encodeEvents(b)],
     'turn': turn?.toJson(),
     if (botCards.isNotEmpty) 'botCards': _encodeCards(botCards),
-    if (peeks.isNotEmpty) 'peeks': _encodeCards(peeks),
   };
 
   factory SnapshotHand._fromJson(_Json m) {
@@ -1221,7 +1453,6 @@ class SnapshotHand {
       batches: List.unmodifiable([for (final b in batches) _Json.eventList(b)]),
       turn: m['turn'] == null ? null : Turn.fromJson(m['turn']),
       botCards: m.has('botCards') ? m.seatMap('botCards', _Json.holeCards) : const {},
-      peeks: m.has('peeks') ? m.seatMap('peeks', _Json.holeCards) : const {},
     );
   }
 }
@@ -1230,25 +1461,7 @@ Map<String, Object?> _encodeCards(Map<int, List<PlayingCard>> cards) => {
   for (final MapEntry(:key, :value) in cards.entries) '$key': [for (final c in value) c.index],
 };
 
-/// The cards of hand seat [seat] in hand [hand], to the player who asked
-/// to see them (see [Peek]) and nobody else.
-class PeekCards extends ServerMessage {
-  const PeekCards({required this.hand, required this.seat, required this.cards});
-
-  final int hand;
-  final int seat;
-  final List<PlayingCard> cards;
-
-  @override
-  Map<String, Object?> toJson() => {
-    't': 'peekCards',
-    'hand': hand,
-    's': seat,
-    'cards': [for (final c in cards) c.index],
-  };
-}
-
-/// To everyone at the table: the player in room seat [seat] showed their
+/// To everyone in the room: the player in room seat [seat] showed their
 /// [cards] after hand [hand] (see [ShowCards]).
 class CardsShown extends ServerMessage {
   const CardsShown({required this.hand, required this.seat, required this.cards});
@@ -1266,36 +1479,18 @@ class CardsShown extends ServerMessage {
   };
 }
 
-/// Told to everyone at the table: the player in room seat [seat] ([name])
-/// pressed Show GTO, or looked at the cards of room seat [target]
-/// ([targetName]).
+/// Told to everyone in the room: the player in room seat [seat] ([name])
+/// pressed Show GTO.
 class Notice extends ServerMessage {
-  const Notice({
-    required this.kind,
-    required this.hand,
-    required this.seat,
-    required this.name,
-    this.target,
-    this.targetName,
-  });
+  const Notice({required this.kind, required this.hand, required this.seat, required this.name});
 
   final NoticeKind kind;
   final int hand;
   final int seat;
   final String name;
-  final int? target;
-  final String? targetName;
 
   @override
-  Map<String, Object?> toJson() => {
-    't': 'notice',
-    'kind': kind.name,
-    'hand': hand,
-    's': seat,
-    'name': name,
-    'target': ?target,
-    'targetName': ?targetName,
-  };
+  Map<String, Object?> toJson() => {'t': 'notice', 'kind': kind.name, 'hand': hand, 's': seat, 'name': name};
 }
 
 /// Only one player has chips left and nobody can rebuy: the player in room
@@ -1312,16 +1507,16 @@ class GameOver extends ServerMessage {
   Map<String, Object?> toJson() => {'t': 'gameOver', 's': ?seat, 'name': ?name};
 }
 
-/// Told to everyone else in the room: the host removed the player in room
-/// seat [seat] ([name]), who is gone now.
+/// Told to everyone else in the room: the host removed the member [id]
+/// ([name]), who is gone now.
 class PlayerRemoved extends ServerMessage {
-  const PlayerRemoved({required this.seat, required this.name});
+  const PlayerRemoved({required this.id, required this.name});
 
-  final int seat;
+  final int id;
   final String name;
 
   @override
-  Map<String, Object?> toJson() => {'t': 'removed', 's': seat, 'name': name};
+  Map<String, Object?> toJson() => {'t': 'removed', 'id': id, 'name': name};
 }
 
 /// One chat message: the [n]th in the room, by [name] ([you]: the player
@@ -1401,6 +1596,20 @@ class Pong extends ServerMessage {
   Map<String, Object?> toJson() => {'t': 'pong', 'n': n};
 }
 
+/// A message of the games other than Hold'em, to a device: [game] at
+/// version [gv], with its [body] (a member's full view of the round, or on
+/// the host's device a bot's turn: see game_envelope.dart).
+class ServerGameMessage extends ServerMessage {
+  const ServerGameMessage({required this.game, required this.gv, required this.body});
+
+  final String game;
+  final int gv;
+  final EnvelopeBody body;
+
+  @override
+  Map<String, Object?> toJson() => {'t': 'g', 'game': game, 'gv': gv, 'm': body.toJson()};
+}
+
 // -----------------------------------------------------------------------------
 // Strict reading
 // -----------------------------------------------------------------------------
@@ -1447,6 +1656,42 @@ extension type _Json._(Map<String, Object?> _m) {
 
   int seat(String key) => integer(key, min: 0, max: 7);
 
+  /// A member id ([Welcome.id]): 1 or more.
+  int memberId(String key) => integer(key, min: 1);
+
+  /// A number (a seat's score): whole or not, but finite.
+  num number(String key) {
+    final v = _m[key];
+    if (v is! num || !v.isFinite) throw ProtocolError('Expected a number: $key');
+    return v;
+  }
+
+  /// A game's key: one of GameKeys', or with [holdem] also [holdemKey].
+  String gameKey(String key, {bool holdem = false}) {
+    final v = _m[key];
+    if (v is String && (GameKeys.all.contains(v) || (holdem && v == holdemKey))) return v;
+    throw ProtocolError('No such game: $key');
+  }
+
+  /// The games a room can play, with their versions (keys this app may not
+  /// know are kept: the room's game area then asks to update the app).
+  Map<String, int> games(String key) {
+    final m = _Json(_m[key]);
+    if (m._m.length > 16 || m._m.keys.any((game) => game.length > 32)) throw const ProtocolError('Not a list of games');
+    return Map.unmodifiable({
+      for (final MapEntry(key: game, :value) in m._m.entries) game: wholeNumber(value, min: 1, max: maxGameVersion),
+    });
+  }
+
+  /// The "m" of a game message, read by [read] (game_envelope.dart).
+  EnvelopeBody envelope(String key, EnvelopeBody Function(Object? json) read) {
+    try {
+      return read(_m[key]);
+    } on FormatException catch (e) {
+      throw ProtocolError('Bad game message: ${e.message}');
+    }
+  }
+
   bool boolean(String key) {
     final v = _m[key];
     return v is bool ? v : throw ProtocolError('Expected true or false: $key');
@@ -1468,6 +1713,12 @@ extension type _Json._(Map<String, Object?> _m) {
   String style(String key) => styleOf(_m[key]);
 
   static String styleOf(Object? json) =>
+      json is String && (botStyleNames.contains(json) || botLevelNames.contains(json))
+      ? json
+      : throw const ProtocolError('No such style');
+
+  /// A poker bot's style only (see [botStyleNames]).
+  static String pokerStyleOf(Object? json) =>
       json is String && botStyleNames.contains(json) ? json : throw const ProtocolError('No such style');
 
   T named<T extends Enum>(String key, List<T> values) {

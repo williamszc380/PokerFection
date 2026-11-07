@@ -63,9 +63,9 @@ class _Device {
           you[m.hand] = m.you;
           if (m.you == null) watched++;
           send(Ready(m.hand));
-        case RoomState(:final you?):
+        case RoomState(yourSeat: final you?):
           final out = m.seats[you].out;
-          if (out && m.settings.rebuys && !rebuying) {
+          if (out && m.settings!.rebuys && !rebuying) {
             rebuys++;
             send(const Rebuy());
           }
@@ -138,15 +138,19 @@ void main() {
     host.send(
       const CreateRoom(
         name: 'Ann',
+        game: holdemKey,
         settings: RoomSettings(seats: 4, stackBb: 20, rebuys: true),
         bots: {2: 'gto', 3: 'tag'},
       ),
     );
+    host.send(const TakeSeat());
     await settle();
     final code = host.welcome!.code;
     guest.send(JoinRoom(code: code, name: 'Ben'));
+    guest.send(const TakeSeat());
     await settle();
-    expect(guest.welcome!.seat, 1);
+    final members = guest.seen.whereType<RoomState>().last.members;
+    expect(members.singleWhere((m) => m.id == guest.welcome!.id).seat, 1);
 
     // Only the host may start, or play the bots.
     guest.send(const StartGame());
@@ -212,7 +216,15 @@ void main() {
       }
     });
 
-    send(const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 3, stackBb: 2), bots: {1: 'tag', 2: 'nit'}));
+    send(
+      const CreateRoom(
+        name: 'Ann',
+        game: holdemKey,
+        settings: RoomSettings(seats: 3, stackBb: 2),
+        bots: {1: 'tag', 2: 'nit'},
+      ),
+    );
+    send(const TakeSeat());
     await pumpEventQueue();
     send(const StartGame());
     for (var tick = 0; !received.any((m) => m is GameOver); tick++) {
@@ -279,7 +291,8 @@ void main() {
     link.messages.listen((text) => received.add(ServerMessage.decode(text)));
     void send(ClientMessage m) => link.send(m.encode());
 
-    send(const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 2), bots: {1: 'gto'}));
+    send(const CreateRoom(name: 'Ann', game: holdemKey, settings: RoomSettings(seats: 2), bots: {1: 'gto'}));
+    send(const TakeSeat());
     await pumpEventQueue();
     send(const StartGame());
     await pumpEventQueue();
@@ -344,7 +357,8 @@ void main() {
     link.messages.listen((text) => received.add(ServerMessage.decode(text)));
     void send(ClientMessage m) => link.send(m.encode());
 
-    send(const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 2), bots: {1: 'gto'}));
+    send(const CreateRoom(name: 'Ann', game: holdemKey, settings: RoomSettings(seats: 2), bots: {1: 'gto'}));
+    send(const TakeSeat());
     await pumpEventQueue();
     send(const StartGame());
     await pumpEventQueue();
@@ -383,7 +397,8 @@ void main() {
     void send(ClientMessage m) => link.send(m.encode());
     const settings = RoomSettings(seats: 2, turnLimit: 15);
 
-    send(const CreateRoom(name: 'Ann', settings: settings, bots: {1: 'gto'}));
+    send(const CreateRoom(name: 'Ann', game: holdemKey, settings: settings, bots: {1: 'gto'}));
+    send(const TakeSeat());
     await pumpEventQueue();
     send(const StartGame());
     await pumpEventQueue();
@@ -410,7 +425,7 @@ void main() {
     // The host turns help on during the hand: it applies from the next one.
     send(const ChangeSettings(settings: RoomSettings(seats: 2, turnLimit: 15, help: HelpLevel.simple)));
     await pumpEventQueue();
-    expect(received.whereType<RoomState>().last.settings.help, HelpLevel.simple);
+    expect(received.whereType<RoomState>().last.settings!.help, HelpLevel.simple);
 
     // 0.9 s into the unshown second, a move still counts.
     var (hand, turn) = await hostTurn();
@@ -556,11 +571,18 @@ void main() {
     SeatInfo ben() => host.seen.whereType<RoomState>().last.seats[1];
 
     host.send(
-      const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true), bots: {2: 'tag'}),
+      const CreateRoom(
+        name: 'Ann',
+        game: holdemKey,
+        settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true),
+        bots: {2: 'tag'},
+      ),
     );
+    host.send(const TakeSeat());
     await settle();
     final code = host.welcome!.code;
     guest.send(JoinRoom(code: code, name: 'Ben'));
+    guest.send(const TakeSeat());
     await settle();
     host.send(const StartGame());
 
@@ -654,17 +676,25 @@ void main() {
     }
 
     host.send(
-      const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true), bots: {2: 'tag'}),
+      const CreateRoom(
+        name: 'Ann',
+        game: holdemKey,
+        settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true),
+        bots: {2: 'tag'},
+      ),
     );
+    host.send(const TakeSeat());
     await until(() => host.welcome != null, 'the room');
     final code = host.welcome!.code;
     ben.send(JoinRoom(code: code, name: 'Ben', device: 'ben-phone').encode());
+    ben.send(const TakeSeat().encode());
     await until(() => got.any((m) => m is Welcome), 'Ben in');
     host.send(const StartGame());
 
     // At Ben's turn (the game waits for him), the host removes him: he plays the hand out first.
     await until(() => turn != null, "Ben's turn");
-    host.send(const RemovePlayer(seat: 1, name: 'Ben'));
+    final benId = host.seen.whereType<RoomState>().last.seats[1].member!;
+    host.send(RemoveMember(id: benId, name: 'Ben'));
     await until(() => host.seen.whereType<RoomState>().last.seats[1].leaving, 'Ben leaves next hand');
     expect(got.whereType<Closing>(), isEmpty);
     plays = true;
@@ -754,7 +784,7 @@ void main() {
     expect(await answer(RejoinRoom.proved(code: code, proof: proof), (s) => s), seatGone);
     expect(await answer(RejoinRoom.proved(code: code, proof: proof), (s) => _Bound(s, null)), seatGone);
     final back = await answer(RejoinRoom.proved(code: code, proof: proof), (s) => _Bound(s, 'offer A|answer A'));
-    expect(back, isA<Welcome>().having((w) => w.seat, 'seat', ben.seat));
+    expect(back, isA<Welcome>().having((w) => w.id, 'id', ben.id));
   });
 
   test("a room code is never all digits: older apps would read peer:23456 as a server called 'peer'", () {

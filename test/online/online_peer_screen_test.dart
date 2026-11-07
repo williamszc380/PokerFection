@@ -9,21 +9,29 @@ import 'package:pokerfection/src/online/invite.dart';
 import 'package:pokerfection/src/online/online_client.dart';
 import 'package:pokerfection/src/online/peer_config.dart';
 import 'package:pokerfection/src/online/protocol.dart';
-import 'package:pokerfection/src/ui/online/lobby_screen.dart';
 import 'package:pokerfection/src/ui/online/online_screen.dart';
+import 'package:pokerfection/src/ui/online/room_panel.dart';
+import 'package:pokerfection/src/ui/online/room_scope.dart';
 
+import '../widget_test.dart' show setScreen;
 import 'fake_room_host.dart';
+import 'room_app.dart';
 
 /// Play Online, hosting and joining rooms through the meeting service (on
 /// the fakes of fake_peer.dart: no real network, router or sockets).
 
 final _en = S.forLanguage(AppLanguage.english);
 
-/// Play Online in the app, for a player called [name].
-Widget _app(Widget screen, {String name = 'Ann'}) => AppSettingsScope(
-  settings: AppSettings()..nickname = name,
-  child: MaterialApp(home: screen),
-);
+/// The app's room in the test running now.
+RoomService? _rooms;
+
+/// Play Online in the app, for a player called [name], in a window wide
+/// enough for the room to be docked beside it.
+Widget _app(WidgetTester tester, Widget screen, {String name = 'Ann'}) {
+  setScreen(tester, const Size(1280, 800));
+  final rooms = _rooms = RoomService(settings: AppSettings()..nickname = name);
+  return roomApp(screen, rooms: rooms);
+}
 
 /// Lets time pass (the widgets' and the fakes') until [done].
 Future<void> _until(WidgetTester tester, FakeInternet net, bool Function() done, String what) async {
@@ -42,14 +50,18 @@ Future<void> _wait(WidgetTester tester, FakeInternet net, Duration time) async {
   }
 }
 
-/// Leaves Play Online (and the lobby: the room closes, if hosted here), and
-/// lets everything finish.
+/// Leaves the room (it closes, if hosted here) and Play Online, and lets
+/// everything finish.
 Future<void> _leave(WidgetTester tester, FakeInternet net) async {
+  final rooms = _rooms;
+  _rooms = null;
+  if (rooms != null) unawaited(rooms.leave());
+  await _wait(tester, net, const Duration(seconds: 1));
   await tester.pumpWidget(const SizedBox());
-  await _wait(tester, net, const Duration(seconds: 5));
+  await _wait(tester, net, const Duration(seconds: 4));
 }
 
-bool _inLobby() => find.byType(LobbyScreen).evaluate().isNotEmpty;
+bool _inLobby() => find.byType(RoomPanel).evaluate().isNotEmpty;
 
 /// The invite link the Invite dialog shows, read back.
 Invite? _shownInvite(WidgetTester tester) {
@@ -94,6 +106,7 @@ void main() {
     TestRoomHost? host;
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           startHost: () async => host = await TestRoomHost.start(net, code: 'K7M2Q'),
           connect: (url) => host!.connector()(url),
@@ -140,6 +153,7 @@ void main() {
     TestRoomHost? host;
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           startHost: () async => host = await TestRoomHost.start(net, code: 'K7M2Q'),
           connect: (url) => host!.connector()(url),
@@ -160,7 +174,14 @@ void main() {
     unawaited(friend.open(JoinRoom(code: invite.code, name: 'Ben')).then((w) => welcome = w));
     await _until(tester, net, () => welcome != null, 'the friend in');
     expect(friend.url, 'peer:K7M2Q');
-    await _until(tester, net, () => find.text('Ben').evaluate().isNotEmpty, 'Ben seated in the lobby');
+    // The room starts with no game: the host picks Hold'em before anyone sits (as Home's Hold'em, Play, Open
+    // Table does), and is taken to its table, where Ben's seat shows; Back to the room beside the screen.
+    _rooms!.hostPick(holdemKey);
+    await _until(tester, net, () => _rooms!.room?.game?.key == holdemKey && _rooms!.gameOnScreen, "Hold'em picked");
+    friend.send(const TakeSeat());
+    await _until(tester, net, () => find.text('Ben').evaluate().isNotEmpty, "Ben seated at the room's table");
+    await tester.binding.handlePopRoute();
+    await _until(tester, net, () => !_rooms!.gameOnScreen, 'back beside the room');
 
     // The connection to the meeting service drops: connecting again, then ready again.
     net.broker.drop(hostPeerId('K7M2Q'));
@@ -180,6 +201,7 @@ void main() {
     TestRoomHost? host;
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           startHost: () async => host = await TestRoomHost.start(net),
           connect: (url) => host!.connector()(url),
@@ -215,6 +237,7 @@ void main() {
     final tried = <String>[];
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           // A room nearby with that code (it has gone since): tried first, and it fails.
           findNearby: (code) async => ['ws://192.168.1.99:47474/ws'],
@@ -243,6 +266,7 @@ void main() {
     final tried = <String>[];
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           findNearby: (code) async => const [],
           connect: (url) {
@@ -258,7 +282,7 @@ void main() {
     expect(_en.noDirectRoute, allOf(contains('mobile data'), contains('same Wi-Fi')));
     // Everything was tried, the room on this computer last; the direct connection's failure says the most.
     expect(tried, ['peer:K7M2Q', 'ws://127.0.0.1:47474/ws']);
-    expect(find.byType(LobbyScreen), findsNothing);
+    expect(find.byType(RoomPanel), findsNothing);
     for (final language in AppLanguage.values) {
       expect(S.forLanguage(language).noDirectRoute, isNotEmpty);
     }
@@ -272,6 +296,7 @@ void main() {
     final guest = net.guest();
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           findNearby: (code) async => const [],
           connect: (url) {
@@ -366,6 +391,7 @@ void main() {
     final tried = <String>[];
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           invite: (code: 'K7M2Q', servers: const ['ws://192.168.1.20:47474/ws']),
           connect: (url) {

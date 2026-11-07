@@ -4,6 +4,8 @@ import 'dart:math';
 
 import '../engine/rules.dart';
 import '../online/clock.dart';
+import '../online/games/game_runner.dart';
+import '../online/games/online_games.dart';
 import '../online/protocol.dart';
 import '../online/seat_proof.dart';
 import '../online/timing.dart';
@@ -24,19 +26,31 @@ import 'room.dart';
 ///
 /// A player coming back over a direct connection proves their seat rather
 /// than naming its token (RejoinRoom.proved, see seat_proof.dart).
+///
+/// A first message from an app with other messages (another
+/// protocolVersion, or other betting rules) gets JoinError.upgrade, read
+/// before the message is: whatever else it holds.
 class RoomRegistry {
   RoomRegistry({
     Clock? clock,
     Random? random,
     this.maxRooms = 200,
     this.joinsPerMinute = 20,
+    this.roomCap = largeRoomCap,
+    this.roomIdle = OnlineTiming.roomIdle,
+    Map<String, OnlineGame>? games,
     this.onRoomClosed,
     this.nextCode,
     this.atMeetingService,
     void Function(String message)? log,
   }) : _clock = clock ?? SystemClock(),
        _random = random ?? Random.secure(),
+       games = games ?? onlineGames,
        _log = log ?? ((_) {});
+
+  /// The most members a room takes on a computer (or bin/server.dart), and
+  /// on a phone or in a browser, which also run the room and the bots.
+  static const largeRoomCap = 16, smallRoomCap = 8;
 
   final Clock _clock;
 
@@ -49,6 +63,19 @@ class RoomRegistry {
 
   /// Most rooms one address may create or join per minute.
   final int joinsPerMinute;
+
+  /// The most members (people, the host included; bots don't count) each
+  /// room takes: [largeRoomCap] or [smallRoomCap], by the hosting device.
+  final int roomCap;
+
+  /// How long a room stays open with nothing happening in its lobby (see
+  /// Room); null: rooms never close for being idle, and a host's absence
+  /// doesn't end their room (a room on the host's own device, which lives
+  /// as long as the host's app does).
+  final Duration? roomIdle;
+
+  /// The games other than Hold'em the rooms can play (see online_games.dart).
+  final Map<String, OnlineGame> games;
 
   /// Told whenever a room closes (a host on its own device then stops).
   final void Function(Room room)? onRoomClosed;
@@ -86,9 +113,9 @@ class RoomRegistry {
   /// Connections open now (in a room or not yet).
   int get connectionCount => _connections.length;
 
-  /// The tokens of everyone with a seat in a room now (not left, not
-  /// removed): a guest coming back shows a pass made with one (seatPass),
-  /// so a host flooded with made-up offers still lets them in.
+  /// The tokens of every member of a room now, spectators too (not left,
+  /// not removed): a guest coming back shows a pass made with one
+  /// (seatPass), so a host flooded with made-up offers still lets them in.
   Iterable<String> get seatTokens sync* {
     for (final room in _rooms.values) {
       yield* room.tokensSeated;
@@ -177,6 +204,7 @@ class RoomRegistry {
           code: code,
           settings: m.settings,
           bots: m.bots,
+          game: m.game,
           clock: _clock,
           random: _random,
           onClosed: (room) {
@@ -184,6 +212,9 @@ class RoomRegistry {
             onRoomClosed?.call(room);
           },
           atMeetingService: atMeetingService == null ? null : () => atMeetingService!(code),
+          cap: roomCap,
+          idleAfter: roomIdle,
+          games: games,
           log: _log,
         );
         _rooms[room.code] = room;
@@ -199,7 +230,7 @@ class RoomRegistry {
       } else if (barred) {
         error = JoinError.removed;
       } else if (player == null) {
-        error = JoinError.tableFull;
+        error = JoinError.roomFull;
       } else {
         opened = (room, player);
       }
@@ -287,6 +318,12 @@ class _Connection {
       reject(Rejection.rateLimited);
       return;
     }
+    // An app with other messages is told to update before its first message is read (it may lack what this
+    // version requires, or carry what it doesn't know).
+    if (_room == null && _otherVersion(text)) {
+      refuse(JoinError.upgrade);
+      return;
+    }
     final ClientMessage message;
     try {
       message = ClientMessage.decode(text);
@@ -320,6 +357,19 @@ class _Connection {
     room.receive(player, message);
     // The room let the player go (they left, or it closed).
     if (room.isClosed || player.link != link) drop();
+  }
+
+  /// Whether [text] is a first message (create, join or rejoin) from an app
+  /// with another protocolVersion or other betting rules.
+  static bool _otherVersion(String text) {
+    final Object? json;
+    try {
+      json = jsonDecode(text);
+    } on FormatException {
+      return false;
+    }
+    if (json is! Map || !const {'create', 'join', 'rejoin'}.contains(json['t'])) return false;
+    return json['v'] != protocolVersion || json['rules'] != rulesVersion;
   }
 
   void _onDone() {

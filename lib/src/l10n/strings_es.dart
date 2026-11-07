@@ -8,6 +8,7 @@ import '../gto/spot_strategy.dart';
 import '../online/protocol.dart' show CloseReason, JoinError;
 import '../online/peer_status.dart' show PeerPhase, PeerStatus, PeerTrouble;
 import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
+import '../app/app_settings.dart' show BoardStyle, StoneStyle;
 import 'strings.dart';
 
 class StringsEs extends S {
@@ -17,6 +18,41 @@ class StringsEs extends S {
   String get play => 'Jugar';
   @override
   String get settings => 'Ajustes';
+
+  @override
+  String get holdem => "Hold'em";
+  @override
+  String get gomoku => 'Gomoku';
+  @override
+  String get bigTwo => 'Big Two';
+  @override
+  String get fightTheLandlord => 'Dou Dizhu';
+  @override
+  String get blackjack => 'Blackjack';
+  @override
+  String get soon => 'Pronto';
+  @override
+  String get general => 'General';
+  @override
+  String get cardsAndTable => 'Cartas y mesa';
+  @override
+  String get boardAndStones => 'Tablero y piedras';
+  @override
+  String get boardColor => 'Tablero';
+  @override
+  String get stoneLook => 'Piedras';
+  @override
+  String boardStyle(BoardStyle style) => switch (style) {
+        BoardStyle.lightWood => 'Madera clara',
+        BoardStyle.darkWood => 'Madera oscura',
+        BoardStyle.green => 'Verde',
+        BoardStyle.gray => 'Gris',
+      };
+  @override
+  String stoneStyle(StoneStyle style) => switch (style) {
+        StoneStyle.glossy => 'Brillantes',
+        StoneStyle.flat => 'Planas',
+      };
 
   @override
   String get handRankings => 'Ranking de manos';
@@ -111,8 +147,6 @@ class StringsEs extends S {
   @override
   String get editTable => 'Editar mesa';
   @override
-  String get solo => 'Solo';
-  @override
   String get multiplayer => 'Multijugador';
   @override
   String get guides => 'Guías';
@@ -180,8 +214,6 @@ class StringsEs extends S {
   String get history => 'Historial';
   @override
   String get shuffleStyles => 'Mezclar estilos de juego';
-  @override
-  String get mainMenu => 'Menú principal';
   @override
   String get showRange => 'Rango';
   @override
@@ -458,7 +490,7 @@ class StringsEs extends S {
   String joinError(JoinError? error) => switch (error) {
         JoinError.upgrade => 'Actualiza la app para jugar',
         JoinError.roomNotFound => 'Sala no encontrada',
-        JoinError.tableFull => 'Mesa llena',
+        JoinError.roomFull => 'Sala llena',
         JoinError.rateLimited => 'Demasiados intentos: espera un minuto',
         JoinError.serverFull => 'Servidor lleno: prueba más tarde',
         JoinError.internal => 'Error del servidor',
@@ -551,24 +583,84 @@ class StringsEs extends S {
   @override
   String get waitingForPlayers => 'Esperando jugadores (hacen falta 2)';
   @override
-  String get allowSeeCards => 'Se pueden ver las cartas de otros';
+  String get joinGame => 'Unirse';
   @override
-  String get seeCards => 'Ver cartas';
+  String get leaveSeat => 'Dejar asiento';
   @override
-  String seeCardsQuestion(String name) => '¿Ver las cartas de $name? Todos se enteran.';
+  String get spectators => 'Espectadores';
+  @override
+  String get spectatorsSeeBots => 'Espectadores ven cartas de bots';
+  @override
+  String get seatList => 'Asientos';
+  @override
+  String get game => 'Juego';
+  @override
+  String get endGame => 'Terminar';
+  @override
+  String get nextGameBadge => 'Siguiente partida';
+  @override
+  String get updateToWatch => 'Actualiza la app para ver';
+  @override
+  String get leaveRoom => 'Salir de la sala';
+  @override
+  String get leaveRoomQuestion => '¿Salir de la sala?';
+  @override
+  String get closeRoomQuestion => '¿Cerrar la sala?';
+  @override
+  String get leaveSeatQuestion => '¿Dejar tu asiento?';
+  @override
+  String get leaveSeatWarning => 'Primero terminas esta mano.';
+  @override
+  String get pickGame => 'Elige un juego';
+  @override
+  String get waitingForGame => 'Esperando que el anfitrión elija un juego';
+  @override
+  String get seatsAfterGame => 'Los asientos aparecen al elegir un juego.';
+  @override
+  String inRoom(String code) => 'Estás en la sala $code.';
+  @override
+  String get leaveSeatWarningRound => 'Primero terminas esta ronda.';
+  @override
+  String needSeats(int n) => 'Este juego necesita $n jugadores: invita a un amigo o añade un bot.';
+  @override
+  String get people => 'Personas';
+  @override
+  String get playingNow => 'Jugando';
+  @override
+  String get pickGameOnHome => 'Elige un juego en Inicio.';
+  @override
+  String get onlineSoon => 'Pronto en línea';
+  @override
+  String get sit => 'Sentarse';
+  @override
+  String get openTable => 'Abrir mesa';
+  @override
+  String get endGameFirst => 'Termina antes la partida en curso.';
+  @override
+  String roomSetupNote(String code) => 'Sala $code: esto abre el juego para todos en ella.';
+  @override
+  String get about => 'Acerca de';
+  @override
+  String versionNumber(String version) => 'Versión $version';
+  @override
+  String buildCommits(int commits, {required bool changed}) =>
+      changed ? 'Compilación: $commits commits + cambios locales' : 'Compilación: $commits commits';
+  @override
+  String get devBuild => 'Compilación: de desarrollo';
+  @override
+  String madeBy(String name) => 'Hecho por $name';
+  @override
+  String gamesList(String list) => 'Juegos: $list';
+  @override
+  String onlineRooms(int protocol) => 'Salas en línea, de igual a igual (protocolo v$protocol)';
+  @override
+  String runningOn(String platform) => 'Funciona en $platform';
   @override
   String get showMyCards => 'Mostrar mis cartas';
   @override
   String showNotice(String? name, String cards) => name == null ? 'Muestras $cards' : '$name muestra $cards';
   @override
   String helpNotice(String? name) => name == null ? 'Usaste la ayuda GTO' : '$name usó la ayuda GTO';
-  @override
-  String peekNotice(String? name, String? target) => switch ((name, target)) {
-        (null, final t?) => 'Miraste las cartas de $t',
-        (final n?, null) => '$n miró tus cartas',
-        (final n?, final t?) => '$n miró las cartas de $t',
-        (null, null) => 'Miraste tus cartas',
-      };
   @override
   String get rulesChanged => 'El anfitrión cambió las reglas (desde la próxima mano).';
   @override
@@ -725,12 +817,15 @@ class StringsEs extends S {
         GlossaryTerm.station => 'Station',
         GlossaryTerm.nit => 'Nit',
         GlossaryTerm.roomCode => 'Código de sala',
+        GlossaryTerm.roomStays => 'Seguir en la sala',
         GlossaryTerm.host => 'Anfitrión',
         GlossaryTerm.hosting => 'Alojar la sala',
         GlossaryTerm.onlineBots => 'Bots',
         GlossaryTerm.timeLimit => 'Tiempo',
         GlossaryTerm.helpLevel => 'Ayuda',
-        GlossaryTerm.seeCards => 'Ver cartas',
+        GlossaryTerm.roomGame => 'Juego',
+        GlossaryTerm.spectators => 'Espectadores',
+        GlossaryTerm.seeBots => 'Cartas de bots',
         GlossaryTerm.rebuys => 'Recompras',
         GlossaryTerm.sitOut => 'Ausentarse',
         GlossaryTerm.chat => 'Chat',
@@ -747,7 +842,7 @@ class StringsEs extends S {
             'estilos cuentan después del flop.',
         GlossaryTerm.play => 'Juega contra los bots sin puntuaciones, como en una partida real.',
         GlossaryTerm.drills => 'Cada Error o Error grave que cometes en el Entrenamiento GTO (Simple o Avanzado) se '
-            'guarda como jugada: la misma mano, hasta esa decisión. Ejercicios (menú principal) vuelve a repartir las '
+            'guarda como jugada: la misma mano, hasta esa decisión. Ejercicios vuelve a repartir las '
             'jugadas pendientes, primero las más atrasadas, y califica tu juego como el entrenamiento Simple; Ver GTO '
             'espera a que hayas jugado. Si la juegas bien (Bueno o mejor), vuelve cada vez más tarde: en 1 h, 1 día, '
             '3 días, 1 semana y luego unas 2,5 veces más. Si la juegas mal (o repites el error al entrenar), vuelve '
@@ -850,22 +945,33 @@ class StringsEs extends S {
         GlossaryTerm.nit => 'Muy tight: espera manos premium.',
         GlossaryTerm.roomCode => 'Cinco letras que identifican una sala en línea. Tus amigos se unen con ellas desde '
             'Jugar en línea.',
-        GlossaryTerm.host => 'Quien creó la sala: va en su dispositivo. Prepara la mesa, la ayuda y el tiempo, empieza '
-            'la partida y juega los bots. El anfitrión puede expulsar a un jugador: toca su asiento en la sala o en '
-            '☰ > Editar mesa, y luego Expulsar. Se va enseguida (si está en una mano, cuando termine) y no puede volver '
-            'a unirse a la sala. Si el anfitrión se va, la sala se cierra.',
+        GlossaryTerm.host => 'Quien creó la sala: va en su dispositivo. Elige el juego, prepara la mesa, la ayuda y el '
+            'tiempo, empieza la partida y juega los bots. El anfitrión puede expulsar a cualquiera: toca su nombre en '
+            'la sala (en la mesa, ☰ > Sala), y luego Expulsar. Se va enseguida (si está en una mano, cuando termine) y '
+            'no puede volver a unirse a la sala. La sala termina cuando el anfitrión pulsa Cerrar sala o sale de la app.',
+        GlossaryTerm.roomStays => 'Mientras estás en una sala, su gente y su chat se quedan a la derecha de cada '
+            'pantalla: juega, lee las guías o cambia los ajustes y sigues en ella. Salir de la sala te saca; Cerrar '
+            'sala, del anfitrión, la termina para todos.',
+        GlossaryTerm.roomGame => 'El anfitrión elige el juego como siempre: un juego en Inicio y luego Jugar. Todos en '
+            'la sala van a su mesa, donde están los asientos: Sentarse toma uno. Elegir otro juego devuelve a todos a '
+            'mirar. En gris: aún no se puede jugar en línea.',
+        GlossaryTerm.spectators => 'Todos entran en la sala como espectadores y ven las cartas de cada persona y los '
+            'estilos de juego. Coach muestra la mejor jugada de quien actúa. Unirse toma un asiento para la '
+            'próxima ronda.',
+        GlossaryTerm.seeBots => 'Lo decide el anfitrión: los espectadores también ven las cartas de los bots, desde la '
+            'próxima ronda.',
         GlossaryTerm.hosting => 'Crear sala abre la sala en tu dispositivo: se juega a través de la app del anfitrión, '
             'sin servidor de juego nuestro. Los amigos se unen con el código o la invitación: en la misma Wi-Fi, incluso '
             'sin internet; desde cualquier otro sitio, un servicio público y gratuito de encuentro presenta los '
             'dispositivos y después se juega de dispositivo a dispositivo, cifrado (algunas redes, a menudo los datos '
             'móviles, no pueden conectarse directamente). Quien no tiene la app juega en el navegador desde la '
-            'invitación. La sala termina cuando el anfitrión se va o cierra la app. También se puede alojar en un '
+            'invitación. La sala termina cuando el anfitrión pulsa Cerrar sala o sale de la app. También se puede alojar en un '
             'navegador: entonces todos se unen por internet, y la sala se cierra con la pestaña.',
-        GlossaryTerm.onlineBots => 'Una sala nueva solo tiene al anfitrión: los demás asientos están libres. Los amigos '
-            'que se unen toman un asiento libre, y el anfitrión puede añadir bots (cada uno con su estilo) o quitarlos. '
-            'Cada mano se reparte a los asientos ocupados, así que hacen falta al menos 2 jugadores; con menos, la '
-            'partida espera. Unirse, irse, añadir o quitar un bot durante la partida vale desde la próxima mano, y '
-            'quien se va deja su asiento libre.',
+        GlossaryTerm.onlineBots => 'Una sala nueva no tiene juego; cuando el anfitrión elige uno, aparecen sus asientos, todos libres. '
+            'Unirse toma un asiento libre (o el de un bot, que cede su sitio), y el anfitrión puede añadir bots (cada '
+            'uno con su estilo) o quitarlos. Cada mano se reparte a los asientos ocupados, así que hacen falta al menos '
+            '2 jugadores; con menos, la partida espera. Unirse, irse, añadir o quitar un bot durante una mano vale desde '
+            'la próxima mano.',
         GlossaryTerm.timeLimit => 'Cuánto tiene cada jugador para decidir. Si se acaba, el servidor pasa si es gratis '
             'y si no se retira. Sin límite: no hay tiempo máximo.',
         GlossaryTerm.helpLevel => 'La ayuda que recibe toda la mesa, elegida por el anfitrión: Ninguna (como Juego '
@@ -873,9 +979,6 @@ class StringsEs extends S {
             'Tus opciones salen enseguida y la respuesta de GTO se suma al resolverse (Resolviendo…). Las jugadas se '
             'envían al elegirlas: la puntuación se ve sin detener la mesa, y una jugada hecha antes de la respuesta se '
             'puntúa cuando llega. Todos se enteran cuando un jugador pulsa Ver GTO.',
-        GlossaryTerm.seeCards => 'Si el anfitrión lo permite, toca el asiento de otro jugador durante una mano y elige '
-            'Ver cartas: sus cartas se ven boca arriba para ti hasta que acabe la mano. Toda la mesa se entera de '
-            'quién miró las cartas de quién.',
         GlossaryTerm.rebuys => 'Qué pasa con un jugador que pierde todas sus fichas; lo decide el anfitrión. Con '
             'recompras: elige Recomprar (otra vez el stack inicial, desde la próxima mano) o Salir; los bots recompran '
             'solos. Sin recompras: queda fuera (su asiento dice Fuera) y mira la partida, desde la mesa o la Sala, o '
@@ -895,7 +998,7 @@ class StringsEs extends S {
             'servidor pasa o se retira por él a los 3 s (tras una mano entera fuera, queda ausentado hasta que vuelve), y '
             'la partida espera si pueden jugar menos de 2. Su app se '
             'reconecta sola y se pone al día con la mano; si se cerró, puede volver desde Jugar en línea. Mientras el '
-            'anfitrión está ausente, los bots pasan o se retiran; si pasa 2 minutos fuera (o cierra la app), la sala '
-            'se cierra.',
+            'anfitrión está ausente, los bots pasan o se retiran. Una sala alojada en la app espera a su anfitrión; en '
+            'un servidor propio se cierra si el anfitrión pasa 2 minutos fuera.',
       };
 }

@@ -11,13 +11,28 @@ const cardAspectRatio = 1.4;
 /// and flips over when that changes. The back and the suit colors follow
 /// the settings, unless given.
 class CardView extends StatelessWidget {
-  const CardView({super.key, required this.width, this.card, this.faceUp = true, this.backStyle, this.faceStyle});
+  const CardView({
+    super.key,
+    required this.width,
+    this.card,
+    this.faceUp = true,
+    this.backStyle,
+    this.faceStyle,
+    this.flipDuration,
+  });
 
   final double width;
   final PlayingCard? card;
   final bool faceUp;
   final CardBackStyle? backStyle;
   final CardFaceStyle? faceStyle;
+
+  /// How long turning over takes; zero turns it at once. Null: [flipTime]
+  /// at the Animations setting's speed (quicker at Fast, at once at Instant).
+  final Duration? flipDuration;
+
+  /// The flip at Normal speed.
+  static const flipTime = Duration(milliseconds: 400);
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +42,7 @@ class CardView extends StatelessWidget {
       width: width,
       height: width * cardAspectRatio,
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 400),
+        duration: flipDuration ?? flipTime * settings.speed.factor,
         transitionBuilder: _flip,
         layoutBuilder: (current, previous) => Stack(children: [...previous, ?current]),
         child: showFace

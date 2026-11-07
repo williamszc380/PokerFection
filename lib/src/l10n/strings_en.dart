@@ -8,6 +8,7 @@ import '../gto/spot_strategy.dart';
 import '../online/protocol.dart' show CloseReason, JoinError;
 import '../online/peer_status.dart' show PeerPhase, PeerStatus, PeerTrouble;
 import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
+import '../app/app_settings.dart' show BoardStyle, StoneStyle;
 import 'strings.dart';
 
 class StringsEn extends S {
@@ -17,6 +18,41 @@ class StringsEn extends S {
   String get play => 'Play';
   @override
   String get settings => 'Settings';
+
+  @override
+  String get holdem => "Hold'em";
+  @override
+  String get gomoku => 'Gomoku';
+  @override
+  String get bigTwo => 'Big Two';
+  @override
+  String get fightTheLandlord => 'Fight the Landlord';
+  @override
+  String get blackjack => 'Blackjack';
+  @override
+  String get soon => 'Soon';
+  @override
+  String get general => 'General';
+  @override
+  String get cardsAndTable => 'Cards & Table';
+  @override
+  String get boardAndStones => 'Board & Stones';
+  @override
+  String get boardColor => 'Board';
+  @override
+  String get stoneLook => 'Stones';
+  @override
+  String boardStyle(BoardStyle style) => switch (style) {
+        BoardStyle.lightWood => 'Light Wood',
+        BoardStyle.darkWood => 'Dark Wood',
+        BoardStyle.green => 'Green',
+        BoardStyle.gray => 'Gray',
+      };
+  @override
+  String stoneStyle(StoneStyle style) => switch (style) {
+        StoneStyle.glossy => 'Glossy',
+        StoneStyle.flat => 'Flat',
+      };
 
   @override
   String get handRankings => 'Hand Rankings';
@@ -113,8 +149,6 @@ class StringsEn extends S {
   @override
   String get editTable => 'Edit Table';
   @override
-  String get solo => 'Solo';
-  @override
   String get multiplayer => 'Multiplayer';
   @override
   String get guides => 'Guides';
@@ -180,8 +214,6 @@ class StringsEn extends S {
   String get history => 'History';
   @override
   String get shuffleStyles => 'Shuffle Play Styles';
-  @override
-  String get mainMenu => 'Main Menu';
   @override
   String get showRange => 'Range';
   @override
@@ -453,7 +485,7 @@ class StringsEn extends S {
   String joinError(JoinError? error) => switch (error) {
         JoinError.upgrade => 'Update the app to play',
         JoinError.roomNotFound => 'Room not found',
-        JoinError.tableFull => 'Table full',
+        JoinError.roomFull => 'Room full',
         JoinError.rateLimited => 'Too many tries: wait a minute',
         JoinError.serverFull => 'Server full: try later',
         JoinError.internal => 'Server error',
@@ -546,24 +578,84 @@ class StringsEn extends S {
   @override
   String get waitingForPlayers => 'Waiting for players (2 needed)';
   @override
-  String get allowSeeCards => "Players Can See Others' Cards";
+  String get joinGame => 'Join game';
   @override
-  String get seeCards => 'See Cards';
+  String get leaveSeat => 'Leave seat';
   @override
-  String seeCardsQuestion(String name) => "See $name's cards? Everyone is told.";
+  String get spectators => 'Spectators';
+  @override
+  String get spectatorsSeeBots => "Spectators see bots' cards";
+  @override
+  String get seatList => 'Seats';
+  @override
+  String get game => 'Game';
+  @override
+  String get endGame => 'End game';
+  @override
+  String get nextGameBadge => 'Next game';
+  @override
+  String get updateToWatch => 'Update the app to watch';
+  @override
+  String get leaveRoom => 'Leave Room';
+  @override
+  String get leaveRoomQuestion => 'Leave the room?';
+  @override
+  String get closeRoomQuestion => 'Close the room?';
+  @override
+  String get leaveSeatQuestion => 'Leave your seat?';
+  @override
+  String get leaveSeatWarning => 'You finish this hand first.';
+  @override
+  String get pickGame => 'Pick a game';
+  @override
+  String get waitingForGame => 'Waiting for the host to pick a game';
+  @override
+  String get seatsAfterGame => 'Seats appear once a game is picked.';
+  @override
+  String inRoom(String code) => "You're in room $code.";
+  @override
+  String get leaveSeatWarningRound => 'You finish this round first.';
+  @override
+  String needSeats(int n) => 'This game needs $n players: invite a friend or add a bot.';
+  @override
+  String get people => 'People';
+  @override
+  String get playingNow => 'Playing';
+  @override
+  String get pickGameOnHome => 'Pick a game on Home.';
+  @override
+  String get onlineSoon => 'Online soon';
+  @override
+  String get sit => 'Sit';
+  @override
+  String get openTable => 'Open Table';
+  @override
+  String get endGameFirst => 'End the game in play first.';
+  @override
+  String roomSetupNote(String code) => 'Room $code: this opens the game for everyone in it.';
+  @override
+  String get about => 'About';
+  @override
+  String versionNumber(String version) => 'Version $version';
+  @override
+  String buildCommits(int commits, {required bool changed}) =>
+      changed ? 'Build: $commits commits + local changes' : 'Build: $commits commits';
+  @override
+  String get devBuild => 'Build: development';
+  @override
+  String madeBy(String name) => 'Made by $name';
+  @override
+  String gamesList(String list) => 'Games: $list';
+  @override
+  String onlineRooms(int protocol) => 'Online rooms, peer to peer (protocol v$protocol)';
+  @override
+  String runningOn(String platform) => 'Running on $platform';
   @override
   String get showMyCards => 'Show My Cards';
   @override
   String showNotice(String? name, String cards) => name == null ? 'You show $cards' : '$name shows $cards';
   @override
   String helpNotice(String? name) => name == null ? 'You used GTO help' : '$name used GTO help';
-  @override
-  String peekNotice(String? name, String? target) => switch ((name, target)) {
-        (null, final t?) => "You looked at $t's cards",
-        (final n?, null) => '$n looked at your cards',
-        (final n?, final t?) => "$n looked at $t's cards",
-        (null, null) => 'You looked at your cards',
-      };
   @override
   String get rulesChanged => 'The host changed the rules (from the next hand).';
   @override
@@ -576,7 +668,7 @@ class StringsEn extends S {
   @override
   String rebuy(String stack) => 'Rebuy $stack';
   @override
-  String get lobby => 'Lobby';
+  String get lobby => 'Room';
   @override
   String get watch => 'Watch';
   @override
@@ -717,12 +809,15 @@ class StringsEn extends S {
         GlossaryTerm.station => 'Station',
         GlossaryTerm.nit => 'Nit',
         GlossaryTerm.roomCode => 'Room code',
+        GlossaryTerm.roomStays => 'Staying in a room',
         GlossaryTerm.host => 'Host',
         GlossaryTerm.hosting => 'Hosting',
         GlossaryTerm.onlineBots => 'Bots',
         GlossaryTerm.timeLimit => 'Time',
         GlossaryTerm.helpLevel => 'Help',
-        GlossaryTerm.seeCards => 'See cards',
+        GlossaryTerm.roomGame => 'Game',
+        GlossaryTerm.spectators => 'Spectators',
+        GlossaryTerm.seeBots => "Bots' cards",
         GlossaryTerm.rebuys => 'Rebuys',
         GlossaryTerm.sitOut => 'Sit out',
         GlossaryTerm.chat => 'Chat',
@@ -739,7 +834,7 @@ class StringsEn extends S {
             'their styles apply after the flop.',
         GlossaryTerm.play => 'Play against the bots without scores, like a real game.',
         GlossaryTerm.drills => 'Every Mistake or Blunder you make in GTO Training (Simple or Advanced) is saved as a '
-            'spot: the same hand, up to that decision. Drills (main menu) deals the spots that are due again, the '
+            'spot: the same hand, up to that decision. Drills deals the spots that are due again, the '
             'most overdue first, and grades your play like Simple training; Show GTO waits until you have played. '
             'Played right (Good or better), a spot comes back later each time: in 1 h, 1 day, 3 days, 1 week, then '
             "about 2.5 times longer. Played wrong (or the same mistake again in training), it's back in 10 min. "
@@ -836,20 +931,29 @@ class StringsEn extends S {
         GlossaryTerm.station => 'Calling station: calls too often and rarely raises.',
         GlossaryTerm.nit => 'Very tight: waits for premium hands.',
         GlossaryTerm.roomCode => 'Five letters that name an online room. Friends join with it from Play Online.',
-        GlossaryTerm.host => 'The player who made the room: it runs on their device. The host sets up the table, the '
-            'help and the time, starts the game, and plays the bots. The host can remove a player: tap their seat in '
-            "the lobby or ☰ > Edit Table, then Remove. They go at once (if they're in a hand, when it ends) and can't "
-            'join the room again. If the host leaves, the room closes.',
+        GlossaryTerm.host => 'The player who made the room: it runs on their device. The host picks the game, sets up '
+            'the table, the help and the time, starts the game, and plays the bots. The host can remove anyone: tap '
+            "their name in the room (at the table, ☰ > Room), then Remove. They go at once (if they're in a hand, when "
+            "it ends) and can't join the room again. The room ends when the host presses Close Room or quits the app.",
+        GlossaryTerm.roomStays => "While you're in a room, its people and its chat stay on the right of every screen: "
+            "play, read the guides or change settings, and you're still in it. Leave Room takes you out; the host's "
+            'Close Room ends it for everyone.',
+        GlossaryTerm.roomGame => "The host picks the game as usual: a game on Home, then Play. Everyone in the room goes "
+            "to its table, where the seats are: Sit takes one. Picking another game sends everyone back to watching. "
+            'Greyed out: not playable online yet.',
+        GlossaryTerm.spectators => "Everyone enters a room as a spectator and sees every person's cards and the play "
+            'styles. Coach shows the best play for whoever acts. Join game takes a seat for the next round.',
+        GlossaryTerm.seeBots => "The host's choice: spectators also see the bots' cards, from the next round.",
         GlossaryTerm.hosting => "Create Room runs the room on your device: the game goes through the host's app, with "
             'no game server of ours. Friends join with the code or the invite: on the same Wi-Fi even without '
             'internet; from anywhere else, a free public meeting service introduces the devices, then the game goes '
             "device to device, encrypted (some networks, often mobile data, can't connect directly). Friends without "
-            'the app play in a browser from the invite. The room ends when the host leaves or closes the app. A '
-            'browser can host too: everyone then joins over the internet, and the room closes with the tab.',
-        GlossaryTerm.onlineBots => 'A new room has only the host: the other seats are empty. Friends who join take an '
-            'empty seat, and the host can add bots (each with a play style) or take them away. A hand is dealt to the '
-            'seats taken, so it needs at least 2 players; with fewer the game waits. Joining, leaving, adding or '
-            'taking away a bot during the game counts from the next hand, and a player who leaves leaves an empty seat.',
+            'the app play in a browser from the invite. The room ends when the host presses Close Room or quits the '
+            'app. A browser can host too: everyone then joins over the internet, and the room closes with the tab.',
+        GlossaryTerm.onlineBots => 'A new room has no game; once the host picks one, its seats appear, all empty. Join game takes an '
+            "empty seat (or a bot's: the bot gives way), and the host can add bots (each with a play style) or take "
+            'them away. A hand is dealt to the seats taken, so it needs at least 2 players; with fewer the game waits. '
+            'Joining, leaving, adding or taking away a bot during a hand counts from the next hand.',
         GlossaryTerm.timeLimit => "How long each player has to decide. When time runs out, the server checks if it's "
             'free, else folds. Off: no limit.',
         GlossaryTerm.helpLevel => 'The help everyone at the table gets, set by the host: None (like Free Play), '
@@ -857,17 +961,15 @@ class StringsEn extends S {
             "at once and GTO's answer joins them when it is solved (Solving…). Moves go as soon as you pick "
             'them: the score shows without holding the table, and a move made before the answer is scored when it comes. '
             'Everyone is told when a player presses Show GTO.',
-        GlossaryTerm.seeCards => "When the host allows it, tap another player's seat during a hand and pick See Cards: "
-            'their cards show face up for you until the hand ends. Everyone at the table is told who looked at whose cards.',
         GlossaryTerm.rebuys => 'What happens to a player who loses all their chips, set by the host. Rebuys on: they '
             'choose Rebuy (the starting stack again, from the next hand) or Leave; bots rebuy by themselves. Rebuys '
-            "off: they're out (their seat says Out) and watch the game, from the table or the Lobby, or leave. When "
-            "only one player has chips and nobody can rebuy, the game is over: everyone is back in the room's lobby, "
+            "off: they're out (their seat says Out) and watch the game, from the table or the Room, or leave. When "
+            "only one player has chips and nobody can rebuy, the game is over: everyone is back in the room, "
             'and the host presses Start for a new game with fresh stacks. With Reset Stacks Every Hand nobody runs out.',
         GlossaryTerm.sitOut => "☰ > Sit Out: from the next hand you aren't dealt in, but you keep your seat and chips "
             "and watch the table. ☰ > I'm Back deals you in again from the next hand. With fewer than 2 players dealt "
             "in, the game waits. A player whose connection is down for a whole hand sits out until they're back.",
-        GlossaryTerm.chat => 'Everyone in the room can chat: in the lobby, and during the game from ☰ > Chat (also '
+        GlossaryTerm.chat => 'Everyone in the room can chat: in the room, and during the game in its Room tab or ☰ > Chat (also '
             "while out of chips). New messages show for a moment at the top of the table, then fade; ☰ > Chat has the "
             'whole conversation and the quick messages (one tap sends one). Up to 256 characters a message, and at '
             'most 4 messages every 8 seconds. The room keeps the last 64 messages: players who join or come back see '
@@ -876,6 +978,7 @@ class StringsEn extends S {
             'or folds for them after 3 s (after a whole hand away, they sit out until they are back), and the game waits '
             'if fewer than 2 can play. Their app reconnects by itself and '
             'catches up with the hand; one that was closed can rejoin from Play Online. While the host is away the bots '
-            'check or fold; when the host is gone for 2 minutes (or closes the app), the room closes.',
+            'check or fold. A room hosted in the app waits for its host; on a server of your own it closes when the '
+            'host is gone for 2 minutes.',
       };
 }

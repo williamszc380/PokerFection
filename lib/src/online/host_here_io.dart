@@ -95,6 +95,10 @@ class _LocalHost implements RoomHost {
     // One room: the host's, with the code taken at the meeting service. Once it closes, the server stops.
     final registry = RoomRegistry(
       maxRooms: 1,
+      // A phone also runs the room and the bots, on top of the game: fewer members.
+      roomCap: Platform.isAndroid || Platform.isIOS ? RoomRegistry.smallRoomCap : RoomRegistry.largeRoomCap,
+      // The room lives as long as this app does (until the host closes it): it never idles out.
+      roomIdle: null,
       log: log,
       nextCode: () => host.peerCode,
       // Guests may come back through the meeting service while this device holds the room's name there.

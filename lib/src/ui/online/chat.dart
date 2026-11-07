@@ -1,4 +1,4 @@
-/// The room's chat, as the lobby and the table (☰ > Chat) show it: the
+/// The room's chat, as the room's panel and the table (☰ > Chat) show it: the
 /// whole conversation, the quick messages, and a box to type in.
 library;
 
@@ -19,9 +19,13 @@ const quickMessages = ['😂', '😭', '😡', '😱', '🤥', '🤡', '🍀', '
 /// for a moment after a few messages at once (the server takes no more:
 /// see OnlineClient.chatWait).
 class ChatPanel extends StatefulWidget {
-  const ChatPanel({super.key, required this.client, this.height});
+  const ChatPanel({super.key, required this.client, this.height, this.draft});
 
   final OnlineClient client;
+
+  /// What is typed, kept outside the panel (the room's: RoomService.chatDraft),
+  /// so it outlives the panel; null: the panel's own.
+  final TextEditingController? draft;
 
   /// How high the messages are; null: all the height there is.
   final double? height;
@@ -32,7 +36,8 @@ class ChatPanel extends StatefulWidget {
 
 class _ChatPanelState extends State<ChatPanel> {
   late final StreamSubscription<void> _changes;
-  final _text = TextEditingController();
+  TextEditingController? _own;
+  TextEditingController get _text => widget.draft ?? (_own ??= TextEditingController());
 
   /// Gives Send back once the wait is over.
   Timer? _wait;
@@ -47,14 +52,30 @@ class _ChatPanelState extends State<ChatPanel> {
     });
     // Opened just after a few messages (sent from the lobby, say).
     _waitIfNeeded();
+    widget.draft?.addListener(_onDraft);
+  }
+
+  @override
+  void didUpdateWidget(ChatPanel old) {
+    super.didUpdateWidget(old);
+    if (old.draft != widget.draft) {
+      old.draft?.removeListener(_onDraft);
+      widget.draft?.addListener(_onDraft);
+    }
   }
 
   @override
   void dispose() {
     unawaited(_changes.cancel());
     _wait?.cancel();
-    _text.dispose();
+    widget.draft?.removeListener(_onDraft);
+    _own?.dispose();
     super.dispose();
+  }
+
+  /// The shared draft changed (typed here, or in another of the room's boxes).
+  void _onDraft() {
+    if (mounted) setState(() {});
   }
 
   void _send(String text) {
@@ -133,34 +154,54 @@ class _ChatPanelState extends State<ChatPanel> {
             ],
           ),
         ),
-        TextField(
-          key: const ValueKey('chat box'),
-          controller: _text,
-          enabled: open,
-          inputFormatters: [_ChatLimit()],
-          textInputAction: TextInputAction.send,
-          onChanged: (_) => setState(() {}),
-          onSubmitted: canSend ? _send : null,
-          // Stays open for the next message.
-          onEditingComplete: () {},
-          decoration: InputDecoration(
-            hintText: s.chatHint,
-            isDense: true,
-            border: const OutlineInputBorder(),
-            helperText: waiting ? s.chatTooFast : null,
-            // Near the most a message can have.
-            counterText: length >= chatMaxLength * 3 ~/ 4 ? '$length/$chatMaxLength' : null,
-            suffixIcon: IconButton(
-              key: const ValueKey('send'),
-              tooltip: s.send,
-              icon: const Icon(Icons.send),
-              onPressed: canSend && cleanChat(_text.text) != null ? () => _send(_text.text) : null,
+        // Letters typed here are the chat's, never a game's keys (F folds at the table, H hits at Blackjack):
+        // they stop at the box, which still gets them.
+        Shortcuts(
+          shortcuts: _typingKeys,
+          child: TextField(
+            key: const ValueKey('chat box'),
+            controller: _text,
+            enabled: open,
+            inputFormatters: [_ChatLimit()],
+            textInputAction: TextInputAction.send,
+            onChanged: (_) => setState(() {}),
+            onSubmitted: canSend ? _send : null,
+            // Stays open for the next message.
+            onEditingComplete: () {},
+            decoration: InputDecoration(
+              hintText: s.chatHint,
+              isDense: true,
+              border: const OutlineInputBorder(),
+              helperText: waiting ? s.chatTooFast : null,
+              // Near the most a message can have.
+              counterText: length >= chatMaxLength * 3 ~/ 4 ? '$length/$chatMaxLength' : null,
+              suffixIcon: IconButton(
+                key: const ValueKey('send'),
+                tooltip: s.send,
+                icon: const Icon(Icons.send),
+                onPressed: canSend && cleanChat(_text.text) != null ? () => _send(_text.text) : null,
+              ),
             ),
           ),
         ),
       ],
     );
   }
+
+  /// The keys a game screen around the chat may use for its moves (letters,
+  /// digits, space, Enter, Escape, unmodified): typed in the box, they go
+  /// no further than it.
+  static final Map<ShortcutActivator, Intent> _typingKeys = {
+    for (final key in [
+      for (var c = LogicalKeyboardKey.keyA.keyId; c <= LogicalKeyboardKey.keyZ.keyId; c++) LogicalKeyboardKey(c),
+      for (var c = LogicalKeyboardKey.digit0.keyId; c <= LogicalKeyboardKey.digit9.keyId; c++) LogicalKeyboardKey(c),
+      LogicalKeyboardKey.space,
+      LogicalKeyboardKey.enter,
+      LogicalKeyboardKey.numpadEnter,
+      LogicalKeyboardKey.escape,
+    ])
+      SingleActivator(key): const DoNothingAndStopPropagationTextIntent(),
+  };
 }
 
 /// One chat message: who said it (the user's own name lit up) and what.

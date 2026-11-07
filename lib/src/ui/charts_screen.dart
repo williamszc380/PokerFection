@@ -147,6 +147,7 @@ class _ChartsScreenState extends State<ChartsScreen> {
           label: Text(label),
           selected: value == current,
           showCheckmark: false,
+          mouseCursor: WidgetStateMouseCursor.clickable,
           visualDensity: VisualDensity.compact,
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           onSelected: enabled

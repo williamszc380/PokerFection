@@ -41,6 +41,7 @@ void main() {
       // Stacks reset every hand: nobody runs out of chips here.
       const CreateRoom(
         name: 'Ann',
+        game: holdemKey,
         settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true),
         bots: {1: 'tag', 2: 'gto'},
       ),
@@ -49,6 +50,7 @@ void main() {
     final code = (await opening).code;
     NextHand? first;
     client.attach((m) => first ??= m is NextHand ? m : null);
+    client.send(const TakeSeat());
     client.send(const StartGame());
     for (var i = 0; first == null && i < 20; i++) {
       await wait();
@@ -162,9 +164,14 @@ void main() {
       }
     });
     host.send(
-      const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true), bots: {2: 'tag'})
-          .encode(),
+      const CreateRoom(
+        name: 'Ann',
+        game: holdemKey,
+        settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true),
+        bots: {2: 'tag'},
+      ).encode(),
     );
+    host.send(const TakeSeat().encode());
     await wait();
 
     // The guest, on the table screen; offline when the test says so.
@@ -182,6 +189,7 @@ void main() {
     final opening = client.open(JoinRoom(code: code, name: 'Ben'));
     await wait();
     await opening;
+    client.send(const TakeSeat());
     NextHand? first;
     client.attach((m) => first ??= m is NextHand ? m : null);
     host.send(const StartGame().encode());

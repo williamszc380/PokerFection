@@ -19,6 +19,7 @@ const _serverRoots = [
   'lib/src/online/redact.dart',
   'lib/src/online/timing.dart',
   'lib/src/online/clock.dart',
+  'lib/src/online/games',
 ];
 
 /// The only other packages the server may use: pure Dart, no Flutter
@@ -34,6 +35,7 @@ const _notOnServer = [
   'lib/src/l10n/',
   'lib/src/game/table_session.dart',
   'lib/src/game/history.dart',
+  'lib/src/kit/jobs/',
 ];
 
 final _directive = RegExp(
@@ -133,9 +135,22 @@ void main() {
     expect(web.where((f) => f.startsWith('lib/src/server/')).toSet(), {
       'lib/src/server/room_registry.dart',
       'lib/src/server/room.dart',
+      'lib/src/server/poker_table.dart',
+      'lib/src/server/runner_table.dart',
       'lib/src/server/hand_runner.dart',
       'lib/src/server/client_link.dart',
     });
+    // The games' online parts (pure Dart): the runner framework and each game's runner.
+    expect(
+      web,
+      containsAll([
+        'lib/src/online/games/game_runner.dart',
+        'lib/src/online/games/online_games.dart',
+        'lib/src/online/games/game_envelope.dart',
+        for (final key in ['gomoku', 'big_two', 'doudizhu', 'blackjack'])
+          'lib/src/games/$key/online/${key}_runner.dart',
+      ]),
+    );
     expect(web, isNot(contains('dart:io')));
     expect(web, containsAll(['lib/src/online/in_process_host.dart', 'lib/src/online/peer_host.dart']));
     final apps = _closure(['lib/main.dart'], platform: _apps);

@@ -1,8 +1,9 @@
 import 'dart:math';
 import 'dart:typed_data';
 
-/// The table's sound effects.
-enum SoundEffect { deal, chips, fold, check, yourTurn, win }
+/// The sound effects of every game: the poker table's, then the other
+/// games' (a Gomoku stone, cards laid down, a pass, a bomb, a lost game).
+enum SoundEffect { deal, chips, fold, check, yourTurn, win, stone, cardsDown, pass, bomb, lose }
 
 /// Samples per second of every sound.
 const soundSampleRate = 22050;
@@ -62,6 +63,33 @@ Float64List synthesize(SoundEffect effect) {
         note(b, 0, 523, 0.45, 0.18, attack: 0.008, octave: 0.1);
         note(b, 0.1, 659, 0.45, 0.18, attack: 0.008, octave: 0.1);
         note(b, 0.2, 784, 0.5, 0.18, attack: 0.008, octave: 0.1);
+      }),
+    // A stone set on the board: a bright click over a short wooden knock.
+    SoundEffect.stone => buffer(0.07)
+      ..apply((b) {
+        note(b, 0, 1900, 0.025, 0.35, toHz: 1500, attack: 0.001, octave: 0.3);
+        note(b, 0, 420, 0.05, 0.25, toHz: 300, octave: 0);
+      }),
+    // Cards laid down together: two quick flicks.
+    SoundEffect.cardsDown => buffer(0.12)
+      ..apply((b) {
+        note(b, 0, 600, 0.05, 0.2, toHz: 380, octave: 0);
+        note(b, 0.035, 560, 0.05, 0.18, toHz: 360, octave: 0);
+      }),
+    // A pass: one soft knock (half of the check).
+    SoundEffect.pass => buffer(0.10)..apply((b) => note(b, 0, 230, 0.07, 0.35, toHz: 180)),
+    // A bomb: a deep thump with a short snap on top.
+    SoundEffect.bomb => buffer(0.32)
+      ..apply((b) {
+        note(b, 0, 110, 0.25, 0.5, toHz: 60, octave: 0.3);
+        note(b, 0.02, 900, 0.08, 0.12, toHz: 500);
+      }),
+    // A lost game: the win's chord turned downwards, one note after another.
+    SoundEffect.lose => buffer(0.75)
+      ..apply((b) {
+        note(b, 0, 523, 0.3, 0.16, attack: 0.008, octave: 0.1);
+        note(b, 0.12, 440, 0.3, 0.16, attack: 0.008, octave: 0.1);
+        note(b, 0.24, 349, 0.45, 0.16, attack: 0.008, octave: 0.1);
       }),
   };
   return _smooth(samples);

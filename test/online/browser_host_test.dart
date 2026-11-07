@@ -15,11 +15,14 @@ import 'package:pokerfection/src/online/peer_config.dart';
 import 'package:pokerfection/src/online/peer_host.dart';
 import 'package:pokerfection/src/online/peer_socket.dart';
 import 'package:pokerfection/src/online/protocol.dart';
-import 'package:pokerfection/src/ui/online/lobby_screen.dart';
 import 'package:pokerfection/src/ui/online/online_screen.dart';
+import 'package:pokerfection/src/ui/online/room_panel.dart';
+import 'package:pokerfection/src/ui/online/room_scope.dart';
 
+import '../widget_test.dart' show setScreen;
 import 'fake_peer.dart';
 import 'fake_room_host.dart';
+import 'room_app.dart';
 
 /// Hosting and joining from the web version: a browser hosts the room in
 /// the page (InProcessHost), with everyone coming in through the meeting
@@ -44,10 +47,16 @@ GuestDoor _door(FakeBroker broker, FakeRtc rtc, Clock clock, {String? code}) =>
       pickCode: code == null ? null : () => code,
     );
 
-Widget _app(Widget screen, {String name = 'Ann'}) => AppSettingsScope(
-  settings: AppSettings()..nickname = name,
-  child: MaterialApp(home: screen),
-);
+/// The app's room in the test running now.
+RoomService? _rooms;
+
+/// Play Online in the app, for a player called [name], in a window wide
+/// enough for the room to be docked beside it.
+Widget _app(WidgetTester tester, Widget screen, {String name = 'Ann'}) {
+  setScreen(tester, const Size(1280, 800));
+  final rooms = _rooms = RoomService(settings: AppSettings()..nickname = name);
+  return roomApp(screen, rooms: rooms);
+}
 
 /// Lets time pass (the widgets' and the fakes') until [done].
 Future<void> _until(WidgetTester tester, FakeInternet net, bool Function() done, String what) async {
@@ -58,9 +67,16 @@ Future<void> _until(WidgetTester tester, FakeInternet net, bool Function() done,
   }
 }
 
-/// Leaves Play Online (and the lobby: the room closes, if hosted here), and
-/// lets everything finish.
+/// Leaves the room (it closes, if hosted here) and Play Online, and lets
+/// everything finish.
 Future<void> _leave(WidgetTester tester, FakeInternet net) async {
+  final rooms = _rooms;
+  _rooms = null;
+  if (rooms != null) unawaited(rooms.leave());
+  for (var i = 0; i < 10; i++) {
+    net.clock.advance(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+  }
   await tester.pumpWidget(const SizedBox());
   for (var i = 0; i < 50; i++) {
     net.clock.advance(const Duration(milliseconds: 100));
@@ -68,7 +84,7 @@ Future<void> _leave(WidgetTester tester, FakeInternet net) async {
   }
 }
 
-bool _inLobby() => find.byType(LobbyScreen).evaluate().isNotEmpty;
+bool _inLobby() => find.byType(RoomPanel).evaluate().isNotEmpty;
 
 void main() {
   group('a room hosted in a browser tab', () {
@@ -161,6 +177,7 @@ void main() {
     InProcessHost? host;
     await tester.pumpWidget(
       _app(
+        tester,
         OnlineScreen(
           page: _site,
           startHost: () async => host = await InProcessHost.start(
@@ -198,7 +215,14 @@ void main() {
     Welcome? welcome;
     unawaited(friend.open(const JoinRoom(code: 'K7M2Q', name: 'Ben')).then((w) => welcome = w));
     await _until(tester, net, () => welcome != null, 'the friend in');
-    await _until(tester, net, () => find.text('Ben').evaluate().isNotEmpty, 'Ben seated in the lobby');
+    // The room starts with no game: the host picks Hold'em before anyone sits (as Home's Hold'em, Play, Open
+    // Table does), and is taken to its table, where Ben's seat shows; Back to the room beside the screen.
+    _rooms!.hostPick(holdemKey);
+    await _until(tester, net, () => _rooms!.room?.game?.key == holdemKey && _rooms!.gameOnScreen, "Hold'em picked");
+    friend.send(const TakeSeat());
+    await _until(tester, net, () => find.text('Ben').evaluate().isNotEmpty, "Ben seated at the room's table");
+    await tester.binding.handlePopRoute();
+    await _until(tester, net, () => !_rooms!.gameOnScreen, 'back beside the room');
 
     // Leaving closes the room, and gives its name at the meeting service back.
     await _leave(tester, net);
@@ -214,6 +238,7 @@ void main() {
       final tried = <String>[];
       await tester.pumpWidget(
         _app(
+          tester,
           OnlineScreen(
             page: Uri.parse('https://williamszc380.github.io/PokerFection/?code=K7M2Q&server=peer%3AK7M2Q'),
             invite: (code: 'K7M2Q', servers: const ['ws://192.168.1.20:47474/ws', 'peer:K7M2Q', 'wss://pf.example/ws']),
@@ -238,6 +263,7 @@ void main() {
       final tried = <String>[];
       await tester.pumpWidget(
         _app(
+          tester,
           OnlineScreen(
             page: _site,
             findNearby: (code) async => const [],
@@ -264,6 +290,7 @@ void main() {
       net.rtc.failIce = true;
       await tester.pumpWidget(
         _app(
+          tester,
           OnlineScreen(page: _site, findNearby: (code) async => const [], connect: room.connector(nearby: false)),
           name: 'Ben',
         ),

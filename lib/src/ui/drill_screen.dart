@@ -13,7 +13,7 @@ import 'strategy_panel.dart' show GradeChip;
 import 'table_controller.dart';
 import 'table_screen.dart';
 
-/// Drills, from the main menu: the table, dealing the saved spots that are
+/// Drills, from Hold'em's menu: the table, dealing the saved spots that are
 /// due, then random hands (see DrillController). With nothing saved yet, a
 /// page says so first, with a button to play random hands.
 class DrillScreen extends StatefulWidget {

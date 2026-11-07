@@ -46,9 +46,17 @@ better.
 
    If you pressed Cancel by mistake, see
    [Friends on the same Wi-Fi can't connect](#friends-on-the-same-wi-fi-cant-connect).
-5. The lobby opens. At the top:
-   - the **room code** (five letters, for example `K7M2Q`) and the
-     **Invite** button;
+5. Play Online closes and **the room stays beside every screen**: docked
+   on the right of a wide window (a PC, a tablet, a big browser window), a
+   slim rail on the right of a phone held sideways (tap it to open the
+   whole room), or a bar at the bottom of a browser on an upright phone.
+   Home's **Multiplayer** button becomes **Room K7M2Q** and shows it too.
+   You can go anywhere in the app meanwhile (a game on your own, a guide,
+   Settings): nobody is taken out of the room. The room shows only who is
+   in it and the chat; the game is picked on Home, and its seats are on its
+   table. At the top of the room:
+   - the **room code** (five letters, for example `K7M2Q`), **Invite** and
+     **Close Room**;
    - **Same Wi-Fi: yes**: friends on your network can join;
    - **Internet: connecting…**, then **Internet: ready**: friends anywhere
      can join with the code or the invite. **Internet: not available**
@@ -57,35 +65,67 @@ better.
      meeting service couldn't give the room a name: create a new room for
      friends elsewhere). Friends on your Wi-Fi can join either way.
      The **?** next to it explains how it works in a few lines.
-6. Set the table. Everyone in the lobby sees your settings as you change
-   them; only you can change them:
+   Under it: the room's game in one line (with **Watch**, which opens its
+   table, once there is one), then **People**: who is **Playing** (bots
+   marked **Bot**) and the **Spectators**, the host marked **Host**.
+6. **Everyone enters as a spectator**, you too: the room has no game and no
+   seats yet. **Pick the game the usual way**: on Home, tap the game, then
+   **Play**. Every game can be played in a room: Hold'em, Gomoku, Big Two,
+   Fight the Landlord and Blackjack (the steps here are Hold'em's; the
+   other games' setups work the same way, with their own rules).
+   Hold'em's setup is then the room's: set the table (below) and press
+   **Open Table**. The game's table opens for you, and **everyone in the room
+   follows you there** (from Home, a menu, even a game of their own, which
+   waits underneath for them). Picking another game sends everyone back to
+   watching; picking Hold'em again starts from your Hold'em rules. Guests
+   don't pick games: their Home and menus work as usual for playing alone.
+7. Set the table in the setup (or later under **Rules** in the table's
+   **Game** tab). Everyone sees your settings; only you can change them:
    - **Seats** (2 to 8), starting stack, **Ante**, **Min-Raise** rule;
-   - **Help**: **None** (like Free Play), **Simple** or **Advanced** (like
-     the app's training: every player's device works out GTO's answer);
+   - **Help**: **Free Play** (no help), or **GTO Training** with
+     **Simple** or **Advanced** (every player's device works out GTO's
+     answer);
    - **Time**: how long each player has to decide, **Off** (no limit,
      the default), 15, 30, 60, 90 or 120 s;
    - **Rebuys** (off by default): what happens to a player who loses all
      their chips (see [Out of chips](#out-of-chips-and-game-over));
    - **Reset Stacks Every Hand** (then nobody runs out of chips, and
-     Rebuys is greyed out), **Show Play Styles** (whether guests see the
-     bots' styles) and **Players Can See Others' Cards** (anyone may look
-     at another player's cards; everyone is told when they do).
-7. A new room has only you: the other seats are empty. Press **Add Bot**
-   to seat a bot (pick its style), or **✕** to take one away. Friends who
-   join take the empty seats; to remove one, tap their seat (see
+     Rebuys is greyed out) and **Show Play Styles** (whether guests see the
+     bots' styles).
+8. **The seats are on the table.** An empty seat says **Sit**: a tap takes
+   it (the host's empty seat offers **Sit** or **Add Bot**). A bot's seat has
+   the host's **✕** to take it away. The **Game** tab beside the table lists
+   the seats too, with **Join game** (the first free seat), **Leave seat**,
+   **Add Bot** and each bot's style. A person who joins a game full of bots
+   takes a bot's seat (the bot leaves). To remove someone, tap them (see
    [Removing a player](#removing-a-player)).
-8. Once at least 2 seats are taken, press **Start**. Everyone goes to the
-   table.
+9. **Spectators see bots' cards** (in the Game tab, off by default) lets spectators see the
+   bots' hidden cards too, from the next hand. Spectators always see every
+   person's cards and the play styles; nobody else sees anyone's cards.
+10. Once at least 2 seats are taken, press **Start** in the Game tab. The
+    game opens for everyone in the room, wherever they are in the app; the
+    room's **Watch** (and the rail's, with a green dot) brings back anyone
+    who leaves it.
 
-Meanwhile everyone can talk in the lobby's **Chat** (see [Chat](#chat)).
+Meanwhile everyone can talk in the room's **Chat** (see [Chat](#chat)).
 
 During the game:
 
-- **☰ > Edit Table** shows the seats and rules. You can add or take away
-  bots, remove players and change the help, time and the two "show" options
-  there; changes count from the next hand, and everyone is told. **Invite**
-  is there too, for friends who come later: they sit down at the next hand.
-- **☰ > Chat** has the room's chat.
+- The table is on the left (on top, on an upright phone), with two tabs
+  beside it: **Game** (your choices; for a spectator, the coach and **Join
+  game**) and **Room** (the people, **Invite** and the chat). A bar on the
+  table's top edge has **Seats** (how many are taken), which opens the
+  seats: take an empty one (from the next hand), add or take away bots,
+  the host's switch and rules (the help, time and "show" options, from
+  the next hand; everyone is told); and the host's **End game**. Friends
+  who come later watch first and sit down at the next hand.
+- **The coach** (spectators): off until you turn it on with **Coach** (in
+  the Game tab or the top bar). It shows GTO's choices for whoever acts,
+  worked out on your own device, from the next hand; "—" when that
+  player's cards are hidden from you (a bot's, unless the host lets
+  spectators see them).
+- **☰ > Chat** has the room's chat; the Room tab shows how many new
+  messages came while you were on the Game tab.
 - While others act, everyone's buttons become **pre-actions**: tick
   **Check/Fold**, **Check**, **Call** (the amount shown) or **Call Any**,
   and it is played the moment your turn comes, which makes the game faster.
@@ -98,12 +138,20 @@ During the game:
   deals you in again from the next hand. Pressed between hands, it counts for the very next one:
   that hand is announced again without you (or with you). The host can sit
   out too; their app still plays the bots meanwhile.
+- **Leaving the table**: a spectator leaves it at any time (Back, or ☰ >
+  Leave): the game goes on, and **Watch** brings them back to the hand
+  being played. A seated player is asked **Leave your seat?** first: they
+  play the hand out, then the table closes and they watch from the room.
 - Players can join, leave and come back between hands; with fewer than 2
   players dealt in (the others sit out, say) the game waits.
 - The host can remove a player: see [Removing a player](#removing-a-player).
-- **The room lasts as long as you stay.** When you leave the table, press
-  **Close Room** or close the app, the room closes for everyone ("The host
-  closed the room").
+- **The room lasts until you close it.** Leaving the table, going to
+  another screen or even to a game on your own never ends it: your app
+  keeps playing the bots meanwhile. **Close Room** (in the room, or ☰
+  during the game, asked first) or closing the app ends it for everyone
+  ("The host closed the room"). A guest's **Leave Room** takes only them
+  out. The host's **End game** brings the table back to its seats, with
+  everyone still in the room: Start again, or pick another game on Home.
 
 ### Out of chips and game over
 
@@ -111,16 +159,17 @@ A player who loses all their chips keeps their seat but isn't dealt in:
 
 - **Rebuys off** (the default): they are out. Their seat says **Out**, and
   they watch the rest of the game at the table (without anyone's cards).
-  **Lobby** shows the room meanwhile (**Watch** goes back to the table),
-  and **Leave** leaves. A bot with no chips is out too.
+  **Room** shows the room's tab meanwhile, and **Leave** gives the seat up
+  (asked first). A bot with no chips is out too.
 - **Rebuys on**: they choose **Rebuy** (the starting stack again, from the
   next hand dealt; they watch until then) or **Leave**. Bots rebuy by
   themselves.
 
 When only one player has chips left and nobody can rebuy, the game is over:
-everyone sees "Game over: Alice wins" for a few seconds, then everyone is
-back in the room's lobby, with the same seats, bots and rules. The host
-presses **Start** for a new game: everyone gets the starting stack again.
+everyone sees "Game over: Alice wins" for a few seconds, then the table
+shows its seats again, with the same seats, bots and rules. The host
+presses **Start** for a new game (everyone gets the starting stack again),
+or picks another game on Home.
 Once someone has run out, players who leave count too: the last one with
 chips wins. Before that, with fewer than 2 players the game just waits.
 
@@ -130,8 +179,8 @@ dealt in again.
 
 ### Removing a player
 
-The host taps the player's seat in the lobby (or in **☰ > Edit Table**
-during the game), picks **Remove** and confirms.
+The host taps the person: their name under **People** in the room (or the
+Room tab), or their seat at the table; then picks **Remove** and confirms.
 
 - A player in the hand being played (who hasn't folded) plays it out, and
   goes when it ends (meanwhile their seat says **Leaves next hand**); anyone
@@ -147,8 +196,10 @@ during the game), picks **Remove** and confirms.
 
 ### Chat
 
-Everyone in the room can chat: in the lobby (its **Chat** part), and at the
-table from **☰ > Chat**, also while out of chips or waiting for a seat.
+Everyone in the room can chat: in the room's **Chat** part (beside every
+screen, and in the Room tab at the table), and at the table from
+**☰ > Chat**, spectators too. Typing in the chat never plays a move (the
+table's F, C and N keys are the chat's while you type).
 
 - Type a message and press Enter or the send button, or tap one of the
   quick messages: 😂 😭 😡 😱 🤥 🤡 🍀 **GG!**
@@ -187,7 +238,7 @@ network.
 
 ### Friends anywhere else
 
-Once the lobby says **Internet: ready**, friends anywhere can join:
+Once the room says **Internet: ready**, friends anywhere can join:
 
 - **With the code alone:** they type it on **Play Online** and press **Join
   Room**. The app first looks for the room on their own network, then asks
@@ -203,7 +254,7 @@ directly to the host from this network": see
 
 ### Sending the invite
 
-1. In the lobby (or **☰ > Edit Table** during the game), press **Invite**.
+1. In the room (or its Room tab during the game), press **Invite**.
 2. Press **Copy invite link** and paste it into a chat, e-mail or text
    message, with the room code.
 
@@ -269,8 +320,8 @@ Good to know:
 - A browser can host too: on the website, **Play > Multiplayer > Create
   Room** (greyed out in a browser without WebRTC, with why). The room runs
   in that tab, and every friend comes in through the meeting service, even
-  on the same Wi-Fi (so it needs internet: the lobby shows **Same Wi-Fi:
-  app only** greyed out). Keep the tab open: the lobby's **?** says so,
+  on the same Wi-Fi (so it needs internet: the room shows **Same Wi-Fi:
+  app only** greyed out). Keep the tab open: the room's **?** says so,
   closing the tab asks first, and then the room closes for everyone. A browser in the background may be slowed down by the browser
   itself; the app is the better host.
 - In Chinese, the browser version downloads its Chinese font from the
@@ -340,7 +391,7 @@ knows it anyway:
   room (it gets a new code).
 
 **If a helper goes away** (these are free services with no guarantee):
-the lobby says **Internet: not available (no connection)**, and friends
+the room says **Internet: not available (no connection)**, and friends
 elsewhere can't join new rooms until it is back. Games already going keep
 playing, since they don't go through it, and the same Wi-Fi keeps working
 (in a browser too, through the invite page's **on the same Wi-Fi as the
@@ -355,8 +406,13 @@ Android phones and tablets, iPhones and iPads can host too, the same way:
 
 - **Keep the app open on screen** while you host. The screen stays on by
   itself while you host; plug the phone in. If the app goes to the
-  background or the phone locks, the room stops: players see
-  "Reconnecting…" and, if you don't come back, "The host closed the room".
+  background or the phone locks (to share the invite in a messaging app,
+  say), the phone may pause it, and the room with it: players see
+  "Reconnecting…". Come back and the room is still there (a room on your
+  device never closes because you were away); friends whose 2 minutes ran
+  out meanwhile join again with the code. Quitting the app closes the room.
+- Held sideways, the room is a slim rail on the right; tap it to open the
+  whole room.
 - Connect the phone to **Wi-Fi** if you can. On mobile data, friends
   elsewhere often can't connect directly (see
   [When a direct connection isn't possible](#3-when-a-direct-connection-isnt-possible)),
@@ -376,8 +432,9 @@ Android phones and tablets, iPhones and iPads can host too, the same way:
 ### "Room not found"
 
 - Check the code (letters and digits, no I, L, O, 0 or 1).
-- Is the host still in the room? The room ends when the host leaves.
-- Does the host's lobby say **Internet: ready**? If not, only friends on
+- Is the room still open? It ends when the host presses **Close Room** or
+  quits the app.
+- Does the host's room say **Internet: ready**? If not, only friends on
   the host's Wi-Fi can join.
 
 ### "Can't connect directly to the host from this network"
@@ -432,8 +489,9 @@ Wi-Fi hiccups happen. A player whose connection drops keeps their seat for
   coming back means joining again ("You were away too long: join again").
 
 If the **host's** connection drops, the bots only check or fold (and the
-game waits between hands) until the host is back; if the host isn't back
-within 2 minutes, the room closes. A friend who joined from elsewhere sees
+game waits between hands) until the host is back. A room hosted in the app
+waits for its host as long as the app runs; on a server of your own, the
+room closes if the host isn't back within 2 minutes. A friend who joined from elsewhere sees
 "The host closed the room" only after the room has been missing at the
 meeting service for 45 seconds, since the host's connection to it may just
 be coming back.
@@ -442,8 +500,9 @@ be coming back.
 
 - **"Update the app to play"**: your app and the host's are different
   versions. Update both (or rebuild both from the same code).
-- **"Table full"**: every seat is taken (people and bots). The host can
-  take a bot away (or, in the lobby, add seats, up to 8).
+- **"Room full"**: the room has as many people as it takes: 16 when a PC
+  (or a server of your own) hosts it, 8 on a phone or in a browser. Every
+  person counts, the host, players and spectators alike; bots don't.
 - **"The host closed the room"**: the host left, closed the room or closed
   the app.
 - **"The host removed you from the room"**: the host removed you (see
@@ -451,7 +510,9 @@ be coming back.
   again.
 - **"Connection lost"**: the connection couldn't come back in time. Ask
   the host for the invite and join again.
-- A room where no hand is dealt for half an hour (in the lobby, or waiting
+- A room hosted in the app never closes by itself. On a server of your
+  own, a room where no hand is dealt and nobody chats for half an hour (in
+  the room before a game, or waiting
   for players) closes by itself.
 
 ## Checking that hosting works

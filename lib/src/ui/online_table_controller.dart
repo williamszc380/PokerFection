@@ -29,10 +29,44 @@ class OnlineToast {
   final GameOver? over;
 }
 
+/// What a spectator's coach shows for the player in [seat] ([name]) at
+/// their turn: GTO's answer ([spot]); or "—" when their cards are [hidden]
+/// from this device (a bot's, unless the host lets spectators see them);
+/// or that it is being worked out ([thinking]); or that there is none
+/// ([none] says why, when known).
+class SpectatorCoach {
+  const SpectatorCoach({
+    required this.seat,
+    required this.name,
+    this.spot,
+    this.hidden = false,
+    this.thinking = false,
+    this.none,
+  });
+
+  final int seat;
+  final String name;
+  final SpotStrategy? spot;
+  final bool hidden;
+  final bool thinking;
+  final NoAnswer? none;
+}
+
 /// The players of a hand, by this device's seat: their room seats, as the
-/// server sent them, and as the table and the session play them; and
-/// whether the user only watches it (out of chips).
-typedef _Lineup = ({List<int> roomSeats, List<SeatInfo> infos, List<PlayerInfo> players, bool watching});
+/// server sent them, and as the table and the session play them; whether
+/// the user only watches it (not dealt in), and if so whether as a
+/// spectator (no seat of theirs: they see the people's cards, and the
+/// coach) rather than from a seat (out of chips, or sitting out); and
+/// whether the host's device plays a GTO bot in it (it then solves the
+/// hand and says Ready, even while the host watches).
+typedef _Lineup = ({
+  List<int> roomSeats,
+  List<SeatInfo> infos,
+  List<PlayerInfo> players,
+  bool watching,
+  bool spectating,
+  bool gtoBots,
+});
 
 /// A move the user made before GTO's answer for it was worked out (the
 /// table doesn't wait for it): scored once the answer comes. [choice] is
@@ -84,13 +118,21 @@ typedef _Unscored = ({
 /// and a move the user made meanwhile is sent again if still due. A copy
 /// that stops matching the server's asks for a snapshot too.
 ///
-/// A user out of chips (or who sits out) [watching] a hand isn't in it: its
-/// seats are the server's, nobody is the user, and the session (help,
-/// scores, the GTO bots) sits it out; on the host's device the bots then
-/// play by their rules. Players out of chips, or who sit out, keep their
-/// places at the table ([TableViewState.others]), the user's at the bottom.
+/// A user [watching] a hand isn't in it: its seats are the server's, and
+/// nobody is the user (every screen check says so: no choices, no seat of
+/// theirs). Watching from a seat (out of chips, or sitting out), the
+/// session sits the hand out. A [spectating] user (everyone enters a room
+/// so, the host too) sees every person's cards (the bots' too when the
+/// host lets spectators: [_visible]), and the session follows the hand
+/// with nobody as the user ([follows]): for the coach ([coachOn], see
+/// [spectatorCoach]), worked out on this device from the cards it may
+/// show, and on the host's device for its GTO bots, which the host's
+/// device keeps playing by the solver (and saying Ready for) while the
+/// host watches, from a seat or as a spectator. Players out of chips, or
+/// who sit out, keep their places at the table ([TableViewState.others]),
+/// the user's at the bottom.
 /// Once the game is over ([gameOver]), nothing more is played here: the
-/// room's lobby takes the connection back ([handBack]).
+/// app's room (RoomService) takes the connection back ([handBack]).
 class OnlineTableController extends TableController {
   /// The table set up by [first], the line-up of a hand; [start] is the
   /// first message to follow, if not [first] itself (a snapshot, for a
@@ -99,10 +141,10 @@ class OnlineTableController extends TableController {
     : seats = _seatMapOf(first),
       _help = first.help,
       _nextHelp = first.help,
-      _showCards = first.showCards,
-      _nextShowCards = first.showCards,
+      coachOn = defaultCoachOn(),
       super(_configFor(client, first)) {
-    _viewRoomSeats = _sessionRoomSeats = _lineupOf(first, client.isHost).roomSeats;
+    _shownLineup = _lineupOf(first, client);
+    _viewRoomSeats = _sessionRoomSeats = _shownLineup.roomSeats;
     // The first message is the line-up (which made the table), or the snapshot it came with.
     _receive(start ?? first);
     _statusChanges = client.changes.listen((_) => _onStatus());
@@ -127,8 +169,41 @@ class OnlineTableController extends TableController {
   /// The room seats of those at the table who don't play the hand on screen.
   List<int> _otherRoomSeats = const [];
 
-  /// The user is out of chips (or sits out) and watches the hand on screen.
+  /// The user isn't dealt in the hand on screen: they watch it (from a
+  /// seat, out of chips or sitting out, or as a [spectating] member).
   bool watching = false;
+
+  /// The user watches the hand on screen as a spectator: no seat of theirs
+  /// (or one they only wait for), every person's cards face up.
+  bool spectating = false;
+
+  /// The spectator's coach is on (the Coach chip, on this device only and
+  /// not kept): see [defaultCoachOn].
+  bool coachOn;
+
+  /// The table is on screen (TableScreen says so). The app's room keeps
+  /// the game going while the user is elsewhere (the host's bots, its
+  /// Ready); meanwhile the table makes no sound and a spectator's coach
+  /// rests (from the next hand once back).
+  bool get onScreen => _onScreen;
+  bool _onScreen = false;
+  set onScreen(bool on) {
+    if (_onScreen == on) return;
+    _onScreen = on;
+    if (_disposed) return;
+    _sessionJob(() async => session.coaching = coachOn && spectating && _onScreen);
+  }
+
+  /// Each sound the table would play now (tests listen).
+  @visibleForTesting
+  static void Function(SoundEffect effect)? debugOnSound;
+
+  /// The seats of the hand on screen whose cards this device may show
+  /// (by this device's seat): a spectator's, the seats whose cards came
+  /// in its deal (people's, and the bots' when the host lets spectators
+  /// see them), never the host's own copy of the bots' cards. The coach
+  /// answers only for these.
+  final Set<int> _visible = {};
 
   /// The user sat out since they last played a hand: back, they watch until
   /// they are dealt in.
@@ -137,7 +212,7 @@ class OnlineTableController extends TableController {
   /// The game is over (once its last hand is shown): who won.
   GameOver? gameOver;
 
-  /// The room's lobby took the connection back: the table leaves it open.
+  /// The app's room took the connection back: the table leaves it open.
   bool _handedBack = false;
 
   /// The next hand's players, until it is dealt.
@@ -214,13 +289,6 @@ class OnlineTableController extends TableController {
 
   /// When the next hand is dealt at the latest.
   DateTime? nextHandAt;
-
-  /// Whether players may look at others' cards in the hand on screen, and
-  /// in the next one.
-  bool _showCards, _nextShowCards;
-
-  /// Cards the user looked at in this hand, by seat (shown face up).
-  final Map<int, List<PlayingCard>> _peeked = {};
 
   /// The user showed their cards after the hand on screen.
   bool _shownMine = false;
@@ -306,11 +374,44 @@ class OnlineTableController extends TableController {
       !(_mine?.sittingOut ?? true) &&
       client.room?.phase == RoomPhase.playing;
 
+  /// The session follows the hand on screen: the user plays it, watches
+  /// it as a spectator, or (on the host's device) a GTO bot plays in it.
+  bool get follows => _followed(_shownLineup);
+
+  /// The line-up of the hand on screen (before the first is dealt, the
+  /// first announced).
+  late _Lineup _shownLineup;
+
+  /// Whether the session follows the hand of [lineup] (see [follows]).
+  static bool _followed(_Lineup lineup) => !lineup.watching || lineup.spectating || lineup.gtoBots;
+
+  /// Whether the server waits for this device to be Ready for the hand of
+  /// [lineup]: it plays in it, or it is the host's with a GTO bot in it
+  /// (the bot's solve comes first; the server waits for it up to
+  /// OnlineTiming.readyWaitWithHelp).
+  static bool _readies(_Lineup lineup) => !lineup.watching || lineup.gtoBots;
+
+  /// The Coach chip starts off, for everyone: the best play isn't shown
+  /// until the user asks for it (the chip, or the Coach button in the Game
+  /// tab). Not kept: every room starts so.
+  static bool defaultCoachOn() => false;
+
+  /// Turns the spectator's coach on or off, on this device: answers from
+  /// the next hand when it was off (the hand's solves start when it is
+  /// dealt).
+  void setCoach(bool on) {
+    if (coachOn == on) return;
+    coachOn = on;
+    _sessionJob(() async => session.coaching = on && spectating && _onScreen);
+    _notify();
+  }
+
   @override
   bool isUserSeat(int seat) => !watching && super.isUserSeat(seat);
 
+  /// Help is for the players dealt in (a spectator has the coach).
   @override
-  bool get guessGto => _help != HelpLevel.none;
+  bool get guessGto => _help != HelpLevel.none && !spectating;
 
   @override
   bool get advanced => _help == HelpLevel.advanced;
@@ -328,7 +429,7 @@ class OnlineTableController extends TableController {
   static TableConfig _configFor(OnlineClient client, NextHand next) {
     final settings = client.room?.settings ?? const RoomSettings();
     return TableConfig(
-      players: _lineupOf(next, client.isHost, stackBb: settings.stackBb).players,
+      players: _lineupOf(next, client, stackBb: settings.stackBb).players,
       ante: settings.ante,
       raiseRule: settings.raiseRule,
       resetStacksEachHand: settings.resetStacks,
@@ -337,10 +438,12 @@ class OnlineTableController extends TableController {
     );
   }
 
-  /// The players of the hand [next] announces, by this device's seat.
-  static _Lineup _lineupOf(NextHand next, bool host, {int stackBb = 100}) {
+  /// The players of the hand [next] announces, by this device's seat, as
+  /// [client]'s user sees it: playing it, or watching it (as a spectator
+  /// when no seat is theirs: see OnlineClient.isSpectator).
+  static _Lineup _lineupOf(NextHand next, OnlineClient client, {int stackBb = 100}) {
     final seats = _seatMapOf(next);
-    final watching = next.you == null;
+    final watching = next.you == null, host = client.isHost;
     final infos = [for (var local = 0; local < seats.playerCount; local++) next.seats[seats.toServer(local)]];
     return (
       roomSeats: [for (final info in infos) info.seat],
@@ -350,6 +453,9 @@ class OnlineTableController extends TableController {
           _playerFor(info, me: !watching && local == 0, host: host, stackBb: stackBb),
       ],
       watching: watching,
+      spectating: watching && client.isSpectator,
+      // The server counts the same bots (see Room: the host's Ready).
+      gtoBots: host && infos.any((info) => info.kind == SeatKind.bot && info.style == 'gto'),
     );
   }
 
@@ -395,7 +501,7 @@ class OnlineTableController extends TableController {
         }
         // What came before is in it: no need to play that.
         _inbox.removeWhere(
-          (e) => e.$1 is HandDealt || e.$1 is HandEvents || e.$1 is NextHand || e.$1 is BotCards || e.$1 is PeekCards,
+          (e) => e.$1 is HandDealt || e.$1 is HandEvents || e.$1 is NextHand || e.$1 is BotCards,
         );
       case RoomState():
         // Only the seats' badges: no need to wait for the table.
@@ -440,8 +546,6 @@ class OnlineTableController extends TableController {
         await _onEvents(m, at);
       case Snapshot():
         await _onSnapshot(m, at);
-      case PeekCards():
-        _onPeek(m);
       case CardsShown():
         _onShown(m);
       case Notice():
@@ -456,7 +560,7 @@ class OnlineTableController extends TableController {
   }
 
   /// The game is over, its last hand shown: everyone sees who won for a
-  /// moment, then the room's lobby (the table screen hands it back).
+  /// moment, then the app's room takes the connection back (handBack).
   void _onGameOver(GameOver m) {
     gameOver = m;
     _clearHeroDecision();
@@ -467,7 +571,7 @@ class OnlineTableController extends TableController {
     _notify();
   }
 
-  /// After the game is over: the room's lobby takes the connection back,
+  /// After the game is over: the app's room takes the connection back,
   /// with the messages not handled here, in order (a new game may have
   /// started already). The table then leaves the connection open.
   OnlineClient handBack() {
@@ -486,28 +590,38 @@ class OnlineTableController extends TableController {
   /// start; the table when the hand is dealt. The server deals once every
   /// device is ready.
   void _onNext(NextHand m) {
-    final lineup = _lineupOf(m, isHost, stackBb: rules.stackBb);
+    final lineup = _lineupOf(m, client, stackBb: rules.stackBb);
     // The next hand's messages use its seats.
     seats = _seatMapOf(m);
     _nextLineup = lineup;
     final stacks = seats.listToLocal(m.stacks), button = seats.toLocal(m.button);
     _nextHelp = m.help;
-    _nextShowCards = m.showCards;
     handOver = true;
     paused = false;
     nextHandAt = DateTime.now().add(Duration(milliseconds: m.maxWaitMs));
-    // A hand the user watches: the session sits it out, and the server doesn't wait for this device.
-    if (!lineup.watching) {
+    // A hand the user watches from a seat: the session sits it out (unless
+    // the host's GTO bots play in it), and the server doesn't wait for this
+    // device. A spectator's session follows it, for the coach.
+    if (_followed(lineup)) {
       _sessionJob(() async {
         _seatSession(lineup);
         session.announced = (stacks: stacks, button: button);
-        session.guessGto = m.help != HelpLevel.none;
-        session.setAdvanced(m.help == HelpLevel.advanced);
+        _helpFor(lineup, m.help);
         _precomputeNext();
       });
-      unawaited(_readyFor(m.hand, Duration(milliseconds: m.maxWaitMs)));
     }
+    if (_readies(lineup)) unawaited(_readyFor(m.hand, Duration(milliseconds: m.maxWaitMs)));
     _notify();
+  }
+
+  /// The session's help for the hand of [lineup]: the room's [help] for
+  /// the user playing it, and on the host's device (its bots then play
+  /// GTO before the flop, as every player's help expects); none for a
+  /// spectator elsewhere, whose coach works it out instead ([coachOn]).
+  void _helpFor(_Lineup lineup, HelpLevel help) {
+    session.guessGto = help != HelpLevel.none && (!lineup.watching || isHost);
+    session.setAdvanced(help == HelpLevel.advanced);
+    session.coaching = lineup.spectating && coachOn && _onScreen;
   }
 
   /// The session takes the next hand's [lineup] (players who stay keep
@@ -533,7 +647,9 @@ class OnlineTableController extends TableController {
   /// table when any of them changed, else the same with each seat's player
   /// as sent.
   void _showLineup(_Lineup lineup) {
+    _shownLineup = lineup;
     watching = lineup.watching;
+    spectating = lineup.spectating;
     if (!watching) _satOut = false;
     final room = client.room;
     final others = [
@@ -600,8 +716,7 @@ class OnlineTableController extends TableController {
     if (deal.stacks.length != playerCount) throw MirrorMismatch('Not the players announced');
     _handNumber = m.hand;
     _help = _nextHelp;
-    _showCards = _nextShowCards;
-    _peeked.clear();
+    _seeCardsIn(batch);
     _shownMine = false;
     _myTurn = null;
     _answer = null;
@@ -614,7 +729,7 @@ class OnlineTableController extends TableController {
       _mirror = null;
       _lostSync(e);
     }
-    if (!watching) _sessionJob(() => _sessionDeal(m.hand, deal));
+    if (follows) _sessionJob(() => _sessionDeal(m.hand, deal));
     handOver = false;
     nextHandAt = null;
     _clearHeroDecision();
@@ -655,6 +770,7 @@ class OnlineTableController extends TableController {
     _sessionBatches = 1;
     await _track(hand);
     if (h.isOver) _finishSessionHand();
+    _coachMoved();
   }
 
   /// Plays [batch] of hand [hand] on the session's copy (if it follows that
@@ -668,6 +784,7 @@ class OnlineTableController extends TableController {
     _sessionBatches++;
     await _track(hand);
     if (h.isOver) _finishSessionHand();
+    _coachMoved();
   }
 
   Future<void> _onEvents(HandEvents m, DateTime at) async {
@@ -715,7 +832,7 @@ class OnlineTableController extends TableController {
         _sessionJob(() async => _correctRecord(hand, turnId, first));
       }
     }
-    if (!watching) _sessionJob(() => _sessionStep(hand, batch));
+    if (follows) _sessionJob(() => _sessionStep(hand, batch));
     view
       ..turnEnds = null
       ..turnLimit = null;
@@ -746,7 +863,7 @@ class OnlineTableController extends TableController {
   Future<void> _resume(SnapshotHand h, DateTime at) async {
     final map = _seatMapOf(h.lineup);
     final batches = [for (final b in h.batches) map.eventsToLocal(b)];
-    final lineup = _lineupOf(h.lineup, isHost, stackBb: rules.stackBb);
+    final lineup = _lineupOf(h.lineup, client, stackBb: rules.stackBb);
     seats = map;
     final goesOn =
         h.hand == _handNumber &&
@@ -760,14 +877,6 @@ class OnlineTableController extends TableController {
       }
     } else {
       await _replay(h, lineup, batches);
-    }
-    // The cards the user looked at stay up.
-    for (final MapEntry(key: seat, value: cards) in map.mapToLocal(h.peeks).entries) {
-      _peeked[seat] = cards;
-      view.seats[seat]
-        ..cards = cards
-        ..cardsHeld = 2
-        ..faceUp = true;
     }
     if (outOfSync && _mirror != null) {
       outOfSync = false;
@@ -787,8 +896,7 @@ class OnlineTableController extends TableController {
     if (deal.stacks.length != playerCount) throw MirrorMismatch('Not the players announced');
     _handNumber = hand;
     _help = _nextHelp = h.lineup.help;
-    _showCards = _nextShowCards = h.lineup.showCards;
-    _peeked.clear();
+    _seeCardsIn(batches.first);
     _shownMine = false;
     _myTurn = null;
     outOfSync = false;
@@ -803,8 +911,8 @@ class OnlineTableController extends TableController {
       _mirror = null;
       _lostSync(e);
     }
-    // A hand the user watches: the session sits it out.
-    if (!watching) {
+    // A hand the user watches from a seat: the session sits it out (see follows).
+    if (follows) {
       _sessionJob(() async {
         final current = session.hand;
         final follows =
@@ -816,8 +924,7 @@ class OnlineTableController extends TableController {
             _sessionBatches <= batches.length;
         if (!follows) {
           _seatSession(lineup);
-          session.guessGto = _help != HelpLevel.none;
-          session.setAdvanced(_help == HelpLevel.advanced);
+          _helpFor(lineup, _help);
           await _sessionDeal(hand, deal);
         }
         for (final batch in batches.skip(_sessionBatches)) {
@@ -1001,17 +1108,21 @@ class OnlineTableController extends TableController {
           ..leavingNextHand = info.leaving
           ..out = same && info.out
           ..sittingOut = same && info.sittingOut
-          ..stack = same && !info.out ? info.chips ?? m.settings.startingStack : 0;
+          ..stack = same && !info.out ? info.chips ?? (m.settings ?? const RoomSettings()).startingStack : 0;
       }
     }
-    final host = m.seats.where((s) => s.seat == m.host).firstOrNull;
+    // The host may watch (no seat): their status is the member's.
+    final host = m.members.where((member) => member.id == m.host).firstOrNull;
     hostAway = m.phase == RoomPhase.playing && host?.status == SeatStatus.away;
     paused = m.phase == RoomPhase.playing && m.paused;
     if (paused) nextHandAt = null;
-    final before = _lastRules;
-    _lastRules = m.settings;
-    if (before != null && before != m.settings && m.phase == RoomPhase.playing && !isHost) {
-      _toast(const OnlineToast.rulesChanged());
+    // A room without Hold'em's rules (the host picked another game after this one ended) changes no rules.
+    if (m.settings case final rules?) {
+      final before = _lastRules;
+      _lastRules = rules;
+      if (before != null && before != rules && m.phase == RoomPhase.playing && !isHost) {
+        _toast(const OnlineToast.rulesChanged());
+      }
     }
     _notify();
   }
@@ -1020,15 +1131,12 @@ class OnlineTableController extends TableController {
     if (!_toasts.isClosed) _toasts.add(toast);
   }
 
-  /// Everyone is told what a player did: pressed Show GTO, or looked at
-  /// someone's cards. It shows for a moment (in step with the table), and
-  /// goes in the hand's record.
+  /// Everyone is told what a player did: pressed Show GTO. It shows for a
+  /// moment (in step with the table), and goes in the hand's record.
   void _onNotice(Notice m) {
     final mine = client.mySeat;
     final note = HandNote(
       name: m.seat == mine ? null : m.name,
-      peek: m.kind == NoticeKind.peek,
-      target: m.target == null || m.target == mine ? null : m.targetName,
     );
     _toast(OnlineToast.note(note));
     _sessionJob(() async {
@@ -1372,10 +1480,14 @@ class OnlineTableController extends TableController {
     return factor;
   }
 
-  /// A hand played again from a snapshot makes no sound.
+  /// A hand played again from a snapshot makes no sound, and nor does the
+  /// table while it is off screen (the room's game goes on over Home or a
+  /// game played alone).
   @override
   void _sound(SoundEffect effect) {
-    if (!_replaying) super._sound(effect);
+    if (_replaying || !_onScreen) return;
+    debugOnSound?.call(effect);
+    super._sound(effect);
   }
 
   /// The server deals the hands.
@@ -1386,8 +1498,8 @@ class OnlineTableController extends TableController {
   @override
   void setAdvanced(bool value) {}
 
-  /// Other players' cards stay hidden online (unless the host lets players
-  /// look: see [peek]).
+  /// Other players' cards stay hidden online, except a spectator's
+  /// [_visible] ones.
   @override
   void toggleCards(int seat) {}
 
@@ -1395,7 +1507,60 @@ class OnlineTableController extends TableController {
   void toggleAllCards() {}
 
   @override
-  bool _cardsShown(int seat) => _peeked.containsKey(seat);
+  bool _cardsShown(int seat) => _visible.contains(seat);
+
+  /// A new hand on screen, dealt with [deal] (its first batch, by this
+  /// device's seat): a spectator sees the cards it came with (see
+  /// [_visible]); anyone else only their own.
+  void _seeCardsIn(List<GameEvent> deal) {
+    _visible.clear();
+    if (!spectating) return;
+    for (final e in deal) {
+      if (e is HoleCardsDealt) _visible.addAll(e.cards.keys);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // The spectator's coach
+  // ---------------------------------------------------------------------------
+
+  /// What a spectator's coach shows for whoever acts on screen (null:
+  /// nobody acts, or the coach is off, or the user isn't spectating). Its
+  /// answer comes from the session's copy of the hand, once that is at the
+  /// same point as the screen (it may fall behind while it solves).
+  SpectatorCoach? get spectatorCoach {
+    final seat = view.actingSeat;
+    if (!spectating || !coachOn || ended || handOver || seat == null || seat >= playerCount) return null;
+    final name = view.seats[seat].info.name;
+    if (!_visible.contains(seat)) return SpectatorCoach(seat: seat, name: name, hidden: true);
+    final h = session.hand;
+    final caughtUp =
+        h != null && h.handNumber == _handNumber && _sessionBatches == _shownBatches && h.toAct == seat && !h.isOver;
+    if (!caughtUp || _sessionBroken) return SpectatorCoach(seat: seat, name: name, thinking: !_sessionBroken);
+    final spot = session.spotToAct(_visible);
+    if (spot != null) return SpectatorCoach(seat: seat, name: name, spot: spot);
+    final NoAnswer? none;
+    var thinking = false;
+    if (h.street == Street.preflop) {
+      // No whole game solved for this hand (the coach was off when it was dealt, or the solve failed).
+      none = session.preflop == null ? null : NoAnswer.leftSolvedLines;
+    } else if (session.postflop case final tracker?) {
+      none = tracker.unavailable;
+      thinking = none == null;
+    } else {
+      none = null;
+    }
+    return SpectatorCoach(seat: seat, name: name, none: none, thinking: thinking);
+  }
+
+  /// The session moved on (or its trackers did): the coach may have a new
+  /// answer, now or once the street being solved is done.
+  void _coachMoved() {
+    if (!spectating) return;
+    _notify();
+    final tracker = session.postflop;
+    if (tracker != null && tracker.solving) unawaited(tracker.ready.then((_) => _notify(), onError: (Object _) {}));
+  }
 
   /// The host changes a bot's style, from the next hand ([seat] as the
   /// players list shows it: the session's).
@@ -1421,53 +1586,20 @@ class OnlineTableController extends TableController {
     if (isHost && !ended) client.send(RemoveBot(roomSeat));
   }
 
-  /// The host changes the help, the time limit, whether the bots' styles
-  /// show or whether players may look at others' cards, from the next hand.
+  /// The host changes the help, the time limit or whether the bots' styles
+  /// show, from the next hand.
   void changeSettings(RoomSettings settings) {
     if (isHost) client.send(ChangeSettings(settings: settings));
   }
 
   // ---------------------------------------------------------------------------
-  // Looking at cards, and telling everyone about help
+  // Showing cards, and telling everyone about help
   // ---------------------------------------------------------------------------
-
-  /// Whether the host lets players look at others' cards in this hand.
-  bool get cardsAllowed => _showCards;
-
-  /// Whether the user may ask to see the cards of [seat] now: looking is
-  /// allowed, the hand is on, and they're someone else's (not seen yet).
-  bool canPeek(int seat) =>
-      _showCards &&
-      !ended &&
-      !watching &&
-      !handOver &&
-      _handNumber > 0 &&
-      seat != TableSession.heroSeat &&
-      seat < playerCount &&
-      !_peeked.containsKey(seat);
-
-  /// Asks to see [seat]'s cards: the server sends them to this device only,
-  /// and tells everyone.
-  void peek(int seat) {
-    if (canPeek(seat)) client.send(Peek(hand: _handNumber, seat: seats.toServer(seat)));
-  }
-
-  /// The cards the user asked for: face up for the rest of the hand (a
-  /// player who folded gets them back, dimmed).
-  void _onPeek(PeekCards m) {
-    if (m.hand != _handNumber) return;
-    final seat = seats.toLocal(m.seat);
-    _peeked[seat] = m.cards;
-    view.seats[seat]
-      ..cards = m.cards
-      ..cardsHeld = 2
-      ..faceUp = true;
-    _notify();
-  }
 
   /// Whether the user may show their cards to everyone now: the hand they
   /// played is over (until the next is dealt), and they haven't yet.
   bool get canShowCards =>
+      !watching &&
       handOver &&
       !ended &&
       _handNumber > 0 &&
@@ -1489,13 +1621,14 @@ class OnlineTableController extends TableController {
     // The seats of the hand on screen (the next one's may be announced).
     final seat = _viewRoomSeats.indexOf(m.seat);
     if (seat < 0) return;
-    if (seat != TableSession.heroSeat) {
+    final mine = isUserSeat(seat);
+    if (!mine) {
       view.seats[seat]
         ..cards = m.cards
         ..cardsHeld = 2
         ..faceUp = true;
     }
-    final note = HandNote(name: seat == TableSession.heroSeat ? null : view.seats[seat].info.name, shown: m.cards);
+    final note = HandNote(name: mine ? null : view.seats[seat].info.name, shown: m.cards);
     _toast(OnlineToast.note(note));
     _notify();
   }
@@ -1528,10 +1661,16 @@ class OnlineTableController extends TableController {
     if (canSitOut) client.send(SitOut(on));
   }
 
-  /// The host removes the player in room seat [roomSeat] ([name]): at once,
-  /// or when the hand they play ends. They can't join the room again.
-  void removePlayer(int roomSeat, String name) {
-    if (isHost && !ended) client.send(RemovePlayer(seat: roomSeat, name: name));
+  /// A spectator takes a seat (the first free one, else a bot's): from the
+  /// next hand, or between hands for the one about to be dealt.
+  void joinGame() {
+    if (!ended) client.send(const TakeSeat());
+  }
+
+  /// Gives up the seat waited for (or, playing, the seat once the hand
+  /// ends): back to watching as a spectator.
+  void leaveSeat() {
+    if (!ended) client.send(const LeaveSeat());
   }
 
   @override

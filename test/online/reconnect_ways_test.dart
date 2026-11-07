@@ -14,10 +14,12 @@ import 'package:pokerfection/src/online/peer_host.dart';
 import 'package:pokerfection/src/online/protocol.dart';
 import 'package:pokerfection/src/online/signaling.dart';
 import 'package:pokerfection/src/server/client_link.dart';
-import 'package:pokerfection/src/ui/online/lobby_screen.dart';
+import 'package:pokerfection/src/ui/online/room_scope.dart';
 
+import '../widget_test.dart' show setScreen;
 import 'fake_peer.dart';
 import 'fake_room_host.dart';
+import 'room_app.dart';
 
 /// Getting a dropped connection back by every way to the room, and what
 /// the player is told when none works; and why coming back through the
@@ -161,12 +163,9 @@ void main() {
     final (host, own, code) = await _hostElsewhere(tester, net);
     final ben = _Friend(host, net, ['peer:K7M2Q'], nearby: false);
     await ben.join(tester, net, code);
-    await tester.pumpWidget(
-      AppSettingsScope(
-        settings: AppSettings(),
-        child: MaterialApp(home: LobbyScreen(client: ben.client)),
-      ),
-    );
+    // The room docked beside the screen (a wide window), with why it ended once it has.
+    setScreen(tester, const Size(1280, 800));
+    await tester.pumpWidget(roomApp(const SizedBox(), rooms: RoomService(settings: AppSettings())..enter(ben.client)));
 
     // The phone moves to a network where no way between the two devices is found.
     net.rtc.failIce = true;

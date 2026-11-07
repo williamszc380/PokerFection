@@ -127,12 +127,14 @@ class _Game {
       client.open(
         const CreateRoom(
           name: 'Ann',
+          game: holdemKey,
           // Stacks reset every hand: nobody runs out of chips here.
           settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true),
         ),
       ),
     );
     expect(welcome.code, code, reason: 'the room has the code the host took at the meeting service');
+    client.send(const TakeSeat());
     host = _Player(client);
   }
 
@@ -147,6 +149,8 @@ class _Game {
     );
     clients.add(client);
     await settle(client.open(JoinRoom(code: code, name: name)));
+    client.send(const TakeSeat());
+    await playUntil(() => client.mySeat != null, '$name seated');
     return _Player(client);
   }
 

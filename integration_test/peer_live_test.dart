@@ -10,6 +10,9 @@
 //
 //   flutter test integration_test/peer_live_test.dart -d windows --dart-define=PEER_LIVE=1
 //
+// Everyone enters the room as a spectator: the host and two guests take a
+// seat (Join game), and three more guests watch a hand.
+//
 // Each run takes a new random room code (and so a new name at the service),
 // and sends it a few dozen short messages: run it now and then, not in a
 // loop. If the service is down or changes its rules, this fails at the
@@ -23,6 +26,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:pokerfection/src/engine/events.dart';
 import 'package:pokerfection/src/online/channel_link.dart';
 import 'package:pokerfection/src/online/connect.dart';
 import 'package:pokerfection/src/online/memory_link.dart';
@@ -55,12 +59,14 @@ void main() {
         expect(room.host.client.welcome!.code, room.code);
       });
 
-      test('a guest joins with the code alone: welcomed, and seated in the room', () async {
+      test('a guest joins with the code alone: welcomed as a spectator, then seated by Join game', () async {
         final ben = room.ben = await room.join('Ben');
         expect(ben.client.status, OnlineStatus.open);
         expect(ben.client.isHost, isFalse);
         expect(ben.client.url, peerEntry(room.code), reason: 'in through the meeting service, not a server');
         await room.until(() => ben.client.room != null, 'the room, after the welcome');
+        expect(ben.client.isSpectator, isTrue);
+        await room.sit(ben);
         expect(_names(ben.client.room!), ['Ann', 'Ben']);
         await room.until(() => _names(room.host.client.room!).contains('Ben'), 'the host seeing Ben');
         expect(room.links.single.address, startsWith('peer:pokerfection-v1-guest-'));
@@ -128,8 +134,37 @@ void main() {
       test('a second guest joins', () async {
         final cat = room.cat = await room.join('Cat');
         await room.until(() => cat.client.room != null, 'the room, after the welcome');
+        await room.sit(cat);
         expect(_names(cat.client.room!), ['Ann', 'Cat']);
         expect(room.links.last.address, isNot(room.links.first.address), reason: 'each guest at its own address');
+      });
+
+      test("three more guests watch a hand, each over its own connection: every person's cards, not the bot's",
+          () async {
+        final names = ['Dan', 'Eve', 'Fay'];
+        final watchers = [for (final name in names) await room.join(name)];
+        final seen = [for (final _ in watchers) <ServerMessage>[]];
+        for (final (i, watcher) in watchers.indexed) {
+          watcher.client.attach(seen[i].add);
+        }
+        room.host.client.send(const AddBot(style: 'tag'));
+        await room.until(() => room.host.client.room!.taken == 3, 'the bot seated');
+        await room.until(() => room.host.client.room!.members.length == 6, 'the host seeing everyone');
+        room.host.client.send(const StartGame());
+        final watched = Stopwatch()..start();
+        for (final (i, watcher) in watchers.indexed) {
+          await room.until(() => seen[i].any((m) => m is HandDealt), '${names[i]} watching a hand', within: _join);
+          final dealt = seen[i].whereType<HandDealt>().first;
+          final lineup = seen[i].whereType<NextHand>().lastWhere((next) => next.hand == dealt.hand);
+          expect(lineup.you, isNull, reason: 'a spectator has no seat in the hand');
+          expect(dealt.batch.whereType<HoleCardsDealt>().single.cards.keys, [
+            for (final (s, info) in lineup.seats.indexed)
+              if (info.kind == SeatKind.human) s,
+          ]);
+          expect(watcher.client.isSpectator, isTrue);
+        }
+        _log('3 spectators saw the first hand ${watched.elapsedMilliseconds} ms after Start');
+        expect(room.links.map((l) => l.address).toSet(), hasLength(room.links.length));
       });
 
       test('with only the addresses STUN found (as between two networks), the public addresses cross the meeting '
@@ -274,8 +309,16 @@ class _LiveRoom {
       },
     );
     host = _Guest(client);
-    await client.open(const CreateRoom(name: 'Ann', settings: RoomSettings(seats: 4)));
+    await client.open(const CreateRoom(name: 'Ann', game: holdemKey, settings: RoomSettings(seats: 4)));
     await until(() => client.room != null, 'the host seeing the room');
+    // The host enters watching too, and takes a seat.
+    await sit(host);
+  }
+
+  /// [guest] takes a seat (Join game), and waits until the room says so.
+  Future<void> sit(_Guest guest) async {
+    guest.client.send(const TakeSeat());
+    await until(() => guest.client.mySeat != null, 'a seat taken');
   }
 
   /// A guest joins with the room's code alone, as a player who typed it

@@ -15,6 +15,8 @@ import 'package:pokerfection/src/gto/preflop/preflop_equity.dart';
 import 'package:pokerfection/src/gto/gto_solutions.dart';
 import 'package:pokerfection/src/ui/table_controller.dart';
 import 'package:pokerfection/src/ui/charts_screen.dart';
+import 'package:pokerfection/src/ui/games.dart';
+import 'package:pokerfection/src/ui/kit/kit_scope.dart';
 import 'package:pokerfection/src/ui/history_screen.dart';
 import 'package:pokerfection/src/ui/range_screen.dart';
 import 'package:pokerfection/src/ui/table_screen.dart';
@@ -59,7 +61,7 @@ GtoSolutions testSolutions() => GtoSolutions(
     );
 
 void main() {
-  testWidgets('main menu, settings and the game setup', (tester) async {
+  testWidgets("Home, settings and Hold'em's game setup", (tester) async {
     setScreen(tester, const Size(800, 1400));
     await tester.pumpWidget(PokerFectionApp(settings: AppSettings()));
     expect(find.byType(LogoMark), findsOneWidget);
@@ -69,15 +71,26 @@ void main() {
     expect(tester.widget<Text>(version).data, 'dev');
     expect(tester.getBottomRight(version).dx, greaterThan(800 - 40));
     expect(tester.getBottomRight(version).dy, greaterThan(1400 - 40));
+    // The five games: Hold'em, Gomoku, Big Two, Fight the Landlord and Blackjack.
+    for (final name in ["Hold'em", 'Gomoku', 'Big Two', 'Fight the Landlord', 'Blackjack']) {
+      expect(find.text(name), findsOneWidget, reason: name);
+    }
+    expect(find.text('Soon'), findsNWidgets(games.where((g) => !g.ready).length));
+    // Every screen reaches the new games' jobs and saved games.
+    expect(find.byType(KitScope), findsOneWidget);
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Sound'), findsOneWidget);
     expect(find.text('Card Back'), findsOneWidget);
+    // Each card face look shows Fight the Landlord's joker too.
+    for (final style in CardFaceStyle.values) {
+      expect(find.byKey(ValueKey('joker ${style.name}')), findsOneWidget, reason: style.name);
+    }
     await tester.tap(find.byType(BackButton));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Play'));
+    await tester.tap(find.text("Hold'em"));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Solo'));
+    await tester.tap(find.text('Play'));
     await tester.pumpAndSettle();
     expect(find.text('GTO Training'), findsOneWidget);
     expect(find.text('Rotate'), findsOneWidget);
@@ -95,6 +108,8 @@ void main() {
   testWidgets('preflop charts: pick a table, a position and a spot, tap a hand', (tester) async {
     setScreen(tester, const Size(1280, 720));
     await tester.pumpWidget(PokerFectionApp(settings: AppSettings()));
+    await tester.tap(find.text("Hold'em"));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Guides'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Preflop Charts'));

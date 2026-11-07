@@ -1828,8 +1828,8 @@ class DecisionPanelState extends State<DecisionPanel> {
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: () => Navigator.of(context).pop(),
-          icon: const Icon(Icons.home_outlined),
-          label: Text(s.mainMenu),
+          icon: const Icon(Icons.logout),
+          label: Text(s.leave),
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
         ),
       ],

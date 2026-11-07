@@ -1,7 +1,8 @@
-// Builds the web version: the app, plus the solvers' Web Worker
-// (lib/solver_worker.dart, in WebAssembly and in JavaScript), which
-// `flutter build web` leaves out. Without the worker the site still works,
-// but solves freeze the page.
+// Builds the web version: the app, plus its two Web Workers, which
+// `flutter build web` leaves out, each in WebAssembly and in JavaScript:
+// the poker solvers' (lib/solver_worker.dart) and the other games' coaches
+// and bots (lib/game_worker.dart). Without them the site still works, but
+// solves and coaches freeze the page.
 //
 // Run from the project root, adding any `flutter build web` options:
 //   dart run tool/build_web.dart [--base-href /PokerFection/]
@@ -33,6 +34,7 @@ Future<void> main(List<String> args) async {
     ...options,
   ]);
   await buildSolverWorker(output);
+  await buildGameWorker(output);
   if (host) {
     for (final mode in ['Debug', 'Profile', 'Release']) {
       final data = Directory('build/windows/x64/runner/$mode/data');
@@ -49,7 +51,16 @@ Future<void> main(List<String> args) async {
 /// (solver_worker.wasm and .mjs, started by solver_worker_wasm.js), which
 /// solves faster, and to JavaScript (solver_worker.js) for browsers that
 /// can't run that. The page tries them in that order (web_workers.dart).
-Future<void> buildSolverWorker(String output) async {
+Future<void> buildSolverWorker(String output) => _buildWorker(output, 'solver_worker', "the solvers'");
+
+/// Compiles lib/game_worker.dart the same way: game_worker.wasm and .mjs
+/// (started by game_worker_wasm.js), and game_worker.js. The page tries
+/// them in that order (lib/src/kit/jobs/backend_web.dart).
+Future<void> buildGameWorker(String output) => _buildWorker(output, 'game_worker', "the games'");
+
+/// Compiles lib/[name].dart ([whose] Web Worker) into [output], to
+/// WebAssembly and to JavaScript.
+Future<void> _buildWorker(String output, String name, String whose) async {
   for (final target in ['wasm', 'js']) {
     await _run(Platform.resolvedExecutable, [
       'compile',
@@ -57,27 +68,28 @@ Future<void> buildSolverWorker(String output) async {
       '-O4',
       '--no-source-maps',
       '-o',
-      '$output/solver_worker.$target',
-      'lib/solver_worker.dart',
+      '$output/$name.$target',
+      'lib/$name.dart',
     ]);
   }
   // The compiler's test for whether a browser can run the WebAssembly goes
   // in the script that starts it; its list of source files isn't part of the site.
-  final support = File('$output/solver_worker.support.js');
-  File('$output/solver_worker_wasm.js').writeAsStringSync(_wasmStarter(support.readAsStringSync().trim()));
+  final support = File('$output/$name.support.js');
+  File('$output/${name}_wasm.js').writeAsStringSync(_wasmStarter(support.readAsStringSync().trim(), name, whose));
   support.deleteSync();
-  File('$output/solver_worker.js.deps').deleteSync();
+  File('$output/$name.js.deps').deleteSync();
 }
 
-/// The worker script (a module) that runs solver_worker.wasm. Where the
-/// browser can't, it fails at once, and the page uses solver_worker.js.
-/// The files it loads carry its build number, so they come from one build.
-String _wasmStarter(String support) => '''
-// Starts the solvers' Web Worker compiled to WebAssembly (tool/build_web.dart).
-if (!$support) throw new Error('This browser cannot run solver_worker.wasm');
+/// The worker script (a module) that runs [name].wasm. Where the browser
+/// can't, it fails at once, and the page uses [name].js. The files it
+/// loads carry its build number, so they come from one build.
+String _wasmStarter(String support, String name, String whose) =>
+    '''
+// Starts $whose Web Worker compiled to WebAssembly (tool/build_web.dart).
+if (!$support) throw new Error('This browser cannot run $name.wasm');
 const build = new URL(import.meta.url).search;
-const {compileStreaming} = await import(`./solver_worker.mjs\${build}`);
-const app = await compileStreaming(fetch(new URL(`solver_worker.wasm\${build}`, import.meta.url)));
+const {compileStreaming} = await import(`./$name.mjs\${build}`);
+const app = await compileStreaming(fetch(new URL(`$name.wasm\${build}`, import.meta.url)));
 (await app.instantiate({})).invokeMain();
 ''';
 

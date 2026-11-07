@@ -74,6 +74,29 @@ enum FeltStyle {
   final Color edge;
 }
 
+/// Gomoku board colors: the two ends of the wood's (or the paint's)
+/// gradient, and the grid lines and star points drawn on it.
+enum BoardStyle {
+  lightWood(Color(0xFFE8C483), Color(0xFFD4A35F), Color(0xFF3E2B16)),
+  darkWood(Color(0xFFB07A48), Color(0xFF8C5A32), Color(0xFF231509)),
+  green(Color(0xFF4C9A6A), Color(0xFF357A50), Color(0xFF10291A)),
+  gray(Color(0xFFB4BBC0), Color(0xFF959DA3), Color(0xFF262B2F));
+
+  const BoardStyle(this.light, this.dark, this.lines);
+  final Color light;
+  final Color dark;
+  final Color lines;
+}
+
+/// How Gomoku stones are drawn.
+enum StoneStyle {
+  /// Round and shiny, lit from the top left, with a soft shadow.
+  glossy,
+
+  /// One plain color each (white ones with a thin outline).
+  flat,
+}
+
 /// The app's preferences (language, animations, sound, looks), kept
 /// between runs. Widgets read them with [AppSettings.of], which rebuilds
 /// them when a setting changes.
@@ -91,6 +114,10 @@ class AppSettings extends ChangeNotifier {
 
   CardFaceStyle cardFaces = CardFaceStyle.twoColors;
   FeltStyle felt = FeltStyle.green;
+
+  /// Gomoku's board and stones.
+  BoardStyle board = BoardStyle.lightWood;
+  StoneStyle stones = StoneStyle.glossy;
 
   /// The name shown to the other players online.
   String nickname = '';
@@ -135,6 +162,8 @@ class AppSettings extends ChangeNotifier {
     final savedVolume = saved['volume'];
     if (savedVolume is num) volume = savedVolume.toDouble().clamp(0, 1);
     cardFaces = pick(CardFaceStyle.values, saved['cardFaces'], cardFaces);
+    board = pick(BoardStyle.values, saved['board'], board);
+    stones = pick(StoneStyle.values, saved['stones'], stones);
     if (saved['nickname'] case final String name) nickname = name;
     if (saved['serverUrl'] case final String url) serverUrl = url;
     if (saved['device'] case final String key) _device = key;
@@ -172,6 +201,8 @@ class AppSettings extends ChangeNotifier {
       'cardBack': cardBack.name,
       'cardFaces': cardFaces.name,
       'felt': felt.name,
+      'board': board.name,
+      'stones': stones.name,
       'nickname': nickname,
       'serverUrl': serverUrl,
       if (_device.isNotEmpty) 'device': _device,

@@ -19,9 +19,11 @@ void main() {
     }
   });
 
-  testWidgets('the main menu opens the hand rankings', (tester) async {
+  testWidgets("Hold'em's menu opens the hand rankings", (tester) async {
     setScreen(tester, const Size(1280, 900));
     await tester.pumpWidget(PokerFectionApp(settings: AppSettings()));
+    await tester.tap(find.text("Hold'em"));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Guides'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Hand Rankings'));

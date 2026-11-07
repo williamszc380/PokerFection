@@ -163,7 +163,10 @@ class TableConfig {
       );
 }
 
-/// A series of hands at one table. The user always sits in seat 0.
+/// A series of hands at one table. The user sits in seat 0 ([heroSeat]),
+/// or, online, nowhere: a spectator's device follows the hands with no
+/// user at the table ([hero] is -1), for the coach, and the host's for its
+/// GTO bots while the host watches.
 class TableSession {
   TableSession(this.config, {Random? random, this.solvePostflop, this.solveSubgame})
       : _random = random ?? Random() {
@@ -175,7 +178,7 @@ class TableSession {
     if (config.handsVisible) {
       revealedSeats.addAll([
         for (var s = 0; s < config.playerCount; s++)
-          if (s != heroSeat && !config.players[s].remote) s,
+          if (!config.players[s].isHero && !config.players[s].remote) s,
       ]);
     }
     _bots = [for (final s in styles) s == null ? null : Bot(s, _random)];
@@ -183,7 +186,13 @@ class TableSession {
     _button = _random.nextInt(config.playerCount);
   }
 
+  /// Where the user sits at a table on the device (and online, when they
+  /// play the hand).
   static const heroSeat = 0;
+
+  /// The user's seat in the current line-up: [heroSeat], or -1 when nobody
+  /// at the table is the user (online, a spectator's line-up).
+  int get hero => players.isNotEmpty && players[heroSeat].isHero ? heroSeat : -1;
 
   /// The table. Online, its players change between hands (see
   /// [changeLineup]).
@@ -220,7 +229,7 @@ class TableSession {
 
   /// Changes one bot's style; null gives it a random style kept secret.
   void setStyle(int seat, BotStyle? style) {
-    if (seat == heroSeat || players[seat].remote) return;
+    if (players[seat].isHero || players[seat].remote) return;
     final resolved = style ?? _randomStyle();
     styles[seat] = resolved;
     hiddenStyles[seat] = style == null;
@@ -236,7 +245,7 @@ class TableSession {
     final h = hand;
     if (h == null) return null;
     final dead = {
-      for (final c in [...h.board, if (seat != heroSeat) ...h.holeCards(heroSeat)]) c.index,
+      for (final c in [...h.board, if (hero >= 0 && seat != hero) ...h.holeCards(hero)]) c.index,
     };
     if (h.street == Street.preflop) {
       final weights = preflop?.rangeOf(h, seat, anySize: true);
@@ -310,8 +319,14 @@ class TableSession {
   /// The score (0-100) of every decision so far.
   Iterable<int> get points => history.expand((h) => h.decisions).map((d) => d.points);
 
-  /// Solved games are needed to score the user or to run GTO bots.
-  bool get needsSolver => guessGto || hasGtoBots;
+  /// Online, on a spectator's device: the coach answers for whoever acts,
+  /// when their cards may be seen (see [spotToAct]). It needs the solves a
+  /// player with help gets: the whole preflop game, and heads-up streets.
+  bool coaching = false;
+
+  /// Solved games are needed to score the user, to run GTO bots, or for a
+  /// spectator's coach.
+  bool get needsSolver => guessGto || hasGtoBots || (hero < 0 && coaching);
 
   /// Who sits where. Online, the players change between hands (see
   /// [changeLineup]).
@@ -326,13 +341,14 @@ class TableSession {
   }
 
   /// Online, between hands: the next hand is played by [lineup] (the user
-  /// in seat 0), maybe more or fewer players than the last. [from] gives,
+  /// in seat 0, or nobody: a spectator's line-up), maybe more or fewer
+  /// players than the last. [from] gives,
   /// for each new seat, the old seat of the same player (who keeps their
   /// bot style), or null for someone new. The last hand is recorded (if it
   /// ended) and put away, or dropped if it didn't (a drill stops at the
   /// user's decision); the next one is dealt with [startHand].
   void changeLineup(List<PlayerInfo> lineup, {List<int?> from = const []}) {
-    if (lineup.isEmpty || !lineup.first.isHero) throw ArgumentError('The user sits in seat 0');
+    if (lineup.isEmpty || lineup.skip(1).any((p) => p.isHero)) throw ArgumentError('The user sits in seat 0');
     final h = hand;
     if (h != null && h.isOver) finishHand();
     hand = null;
@@ -402,6 +418,7 @@ class TableSession {
   /// of time. Null when there is no such decision (the big blind wins when
   /// everyone folds).
   PreflopSpec? get upcomingHeroSpec {
+    if (hero < 0) return null;
     final next = upcoming;
     final order = _spec(next.stacks, next.button, heroHistory: const []).hero;
     if (order == config.playerCount - 1) return null;
@@ -428,7 +445,9 @@ class TableSession {
   /// record and scored decisions.
   PokerHand startHand([RemoteDeal? deal]) {
     final old = hand;
-    final again = deal != null && deal.handNumber == handNumber && history.isNotEmpty;
+    // The user's record of the same hand: a fresh copy of it (with no user
+    // at the table there is none).
+    final again = deal != null && deal.handNumber == handNumber && history.lastOrNull?.handNumber == handNumber;
     if (old != null && !old.isOver && deal == null) throw StateError('The current hand is not finished');
     if (old != null && old.isOver && !again) finishHand();
     if (again && _recorded) {
@@ -475,11 +494,11 @@ class TableSession {
         raiseRule: config.raiseRule,
       );
     }
-    if (!again) {
+    if (!again && hero >= 0) {
       history.add(HandRecord(
         handNumber: handNumber,
-        holeCards: h.holeCards(heroSeat),
-        position: h.positionOf(heroSeat),
+        holeCards: h.holeCards(hero),
+        position: h.positionOf(hero),
         advanced: advanced,
       ));
     }
@@ -488,7 +507,7 @@ class TableSession {
         ? PreflopTracker(
             blueprint: blueprint,
             solveSubgame: subgames,
-            heroSeat: heroSeat,
+            heroSeat: hero,
           )
         : null;
     postflop = tracker != null && streets != null
@@ -497,7 +516,7 @@ class TableSession {
             solve: streets,
             bigBlind: TableConfig.bigBlind,
             raiseRule: config.raiseRule,
-            heroSeat: heroSeat,
+            heroSeat: hero,
           )
         : null;
     _heroPreflop = null;
@@ -523,7 +542,7 @@ class TableSession {
     final h = hand;
     if (h == null) return;
     final tracker = preflop;
-    if (tracker != null && h.street == Street.preflop && h.toAct == heroSeat && !h.isOver) {
+    if (tracker != null && h.street == Street.preflop && hero >= 0 && h.toAct == hero && !h.isOver) {
       final ticket = ++_heroPreflopTicket;
       _heroPreflopDone = false;
       _heroPreflop = tracker.prepare(h).whenComplete(() {
@@ -541,11 +560,13 @@ class TableSession {
   bool get preflopPending => !_heroPreflopDone;
 
   /// Whether the player to act needs a solved answer after the flop: the
-  /// user in Guess the GTO mode, or a GTO bot.
+  /// user in Guess the GTO mode, a GTO bot, or (with no user at the table)
+  /// anyone, for a spectator's coach.
   bool get needsPostflopAnswer {
     final h = hand;
     if (h == null || h.street == Street.preflop || h.toAct == null || postflop == null) return false;
-    return h.toAct == heroSeat ? guessGto : styles[h.toAct!] == BotStyle.gto;
+    if (hero < 0 && coaching) return true;
+    return h.toAct == hero ? guessGto : styles[h.toAct!] == BotStyle.gto;
   }
 
   /// Records the result of the finished hand. Calling it again does nothing.
@@ -555,13 +576,16 @@ class TableSession {
     if (_recorded) return;
     _recorded = true;
     stacks = [for (var i = 0; i < config.playerCount; i++) h.stackOf(i)];
-    final result = h.stackOf(heroSeat) - h.startingStackOf(heroSeat);
+    // Only the user's hands count (none while nobody at the table is the user).
+    final record = history.lastOrNull;
+    if (hero < 0 || record == null || record.handNumber != h.handNumber) return;
+    final result = h.stackOf(hero) - h.startingStackOf(hero);
     heroNet += result;
-    history.last.result = result;
+    record.result = result;
     handsFinished++;
   }
 
-  bool get isHeroTurn => hand?.toAct == heroSeat;
+  bool get isHeroTurn => hero >= 0 && hand?.toAct == hero;
 
   /// The solved whole game for the current hand, if it is ready (and
   /// really is this hand's game).
@@ -575,8 +599,20 @@ class TableSession {
   /// The GTO answer for the user's current decision (Guess the GTO mode).
   SpotStrategy? heroSpot() {
     final h = hand;
-    if (!guessGto || h == null || h.toAct != heroSeat) return null;
+    if (!guessGto || h == null || hero < 0 || h.toAct != hero) return null;
     return h.street == Street.preflop ? preflop?.spotFor(h) : postflop?.spotFor(h);
+  }
+
+  /// Online, for a spectator's coach: GTO's answer for whoever acts, if
+  /// their cards may be seen ([visible], the seats shown face up) and this
+  /// device knows them. Before the flop, the solved whole game's answer
+  /// (the blueprint, see PreflopTracker.blueprintSpotFor); after it, the
+  /// street's solve, heads-up only (with more players there is none: see
+  /// PostflopTracker.unavailable). Null otherwise, or until it is solved.
+  SpotStrategy? spotToAct(Set<int> visible) {
+    final h = hand, seat = hand?.toAct;
+    if (h == null || seat == null || h.isOver || !visible.contains(seat) || !h.knows(seat)) return null;
+    return h.street == Street.preflop ? preflop?.blueprintSpotFor(h) : postflop?.spotFor(h);
   }
 
   /// Whether the bot to act plays the solver's strategy right now: GTO bots
@@ -593,7 +629,7 @@ class TableSession {
     final h = hand!;
     final seat = h.toAct!;
     final bot = _bots[seat];
-    if (bot == null) throw StateError(seat == heroSeat ? "It is the user's turn" : 'Seat $seat is played elsewhere');
+    if (bot == null) throw StateError(seat == hero ? "It is the user's turn" : 'Seat $seat is played elsewhere');
     assert(h.knows(seat), 'A bot needs to know its cards');
     if (botPlaysGto) {
       final move = h.street == Street.preflop ? preflop?.sample(h, _random) : postflop?.sample(h, _random);

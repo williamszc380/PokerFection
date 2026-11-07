@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app/app_settings.dart';
-import '../../app/keep_awake.dart';
 import '../../l10n/strings.dart';
 import '../../online/host_here.dart';
 import '../../online/invite.dart';
@@ -16,7 +14,8 @@ import '../../online/peer_config.dart' show peerEntry;
 import '../../online/protocol.dart';
 import '../../online/room_host.dart';
 import '../glossary.dart';
-import 'lobby_screen.dart';
+import 'room_panel.dart' show roomEndedText;
+import 'room_scope.dart';
 
 /// Play Online: the player's name and a room code or invite link, then one
 /// button at the bottom: Create Room while the code is empty, Join Room once
@@ -37,6 +36,11 @@ import 'lobby_screen.dart';
 ///
 /// When the app closed (or the page reloaded) during a game, Rejoin Room
 /// takes the player back to their seat, if the room kept it.
+///
+/// Once in, the room is the app's (RoomService): this screen closes, and
+/// the room stays beside every screen. While in a room, this screen says
+/// so at the top (with Leave Room, or Close Room for the host) and greys
+/// out the rest: one room at a time.
 class OnlineScreen extends StatefulWidget {
   const OnlineScreen({super.key, this.connect, this.invite, this.startHost, this.findNearby, this.page});
 
@@ -85,7 +89,19 @@ class _OnlineScreenState extends State<OnlineScreen> {
     final settings = AppSettings.of(context);
     _name.text = settings.nickname;
     _server.text = settings.serverUrl;
-    if (widget.invite case final invite?) _useInvite(invite);
+    if (widget.invite case final invite?) {
+      _useInvite(invite);
+      // An invite to the room the app is in already: the room, not this screen.
+      final rooms = RoomScope.maybeOf(context);
+      if (rooms != null && rooms.stage == RoomStage.open && rooms.room?.code == invite.code) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final navigator = Navigator.of(context);
+          if (navigator.canPop()) navigator.pop();
+          rooms.openPanel();
+        });
+      }
+    }
   }
 
   void _useInvite(Invite invite) {
@@ -161,8 +177,9 @@ class _OnlineScreenState extends State<OnlineScreen> {
     return name;
   }
 
-  /// Opens [client] with [opening], then goes to the lobby. [unreachable]
-  /// says why when no server could be reached, if there is more to say.
+  /// Opens [client] with [opening], then hands the room to the app (it
+  /// stays beside every screen) and closes. [unreachable] says why when no
+  /// server could be reached, if there is more to say.
   Future<void> _open(OnlineClient client, ClientMessage opening, {String? unreachable}) async {
     final s = S.of(context);
     final settings = AppSettings.of(context);
@@ -189,8 +206,16 @@ class _OnlineScreenState extends State<OnlineScreen> {
       unawaited(client.close());
       return;
     }
+    final rooms = RoomScope.maybeOf(context);
+    if (rooms == null || rooms.inRoom) {
+      unawaited(client.close());
+      return;
+    }
     setState(() => _busy = null);
-    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LobbyScreen(client: client)));
+    rooms.enter(client);
+    // Play Online sits above Home: back there, with the room beside it.
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
   }
 
   /// Creates a room: on the server set by hand, else on this device (the
@@ -228,38 +253,12 @@ class _OnlineScreenState extends State<OnlineScreen> {
       }
       return;
     }
-    _whileHosting(host);
     if (!mounted) {
       unawaited(host.stop());
       return;
     }
+    // The app's room takes over the hosting duties (the screen kept on, closing properly on exit).
     await _open(OnlineClient(host.ownServer, host: host, connect: widget.connect), CreateRoom(name: name));
-  }
-
-  /// While [host] serves the room: the screen stays on and the Wi-Fi's
-  /// broadcasts are heard (phones), and closing the app closes the room
-  /// properly (everyone is told, the room's name at the meeting service is
-  /// given back, the router's port closes).
-  void _whileHosting(RoomHost host) {
-    unawaited(keepScreenOn(true));
-    unawaited(hearRoomSearches(true));
-    final exit = AppLifecycleListener(
-      onExitRequested: () async {
-        try {
-          await host.stop().timeout(const Duration(seconds: 2));
-        } on Object {
-          // Closing anyway.
-        }
-        return AppExitResponse.exit;
-      },
-    );
-    unawaited(
-      host.stopped.whenComplete(() {
-        exit.dispose();
-        unawaited(keepScreenOn(false));
-        unawaited(hearRoomSearches(false));
-      }),
-    );
   }
 
   /// Whether this page may not open [server] at all: a plain ws:// one
@@ -361,11 +360,76 @@ class _OnlineScreenState extends State<OnlineScreen> {
     );
   }
 
+  /// While in a room: which one, and Leave Room (Close Room for the host),
+  /// asked first; once it has ended, why, and OK.
+  Widget _inRoom(BuildContext context, RoomService rooms) {
+    final s = S.of(context);
+    final theme = Theme.of(context);
+    final client = rooms.client;
+    final ended = rooms.stage == RoomStage.ended;
+    final host = rooms.isHost;
+    final code = rooms.room?.code ?? client?.welcome?.code ?? '';
+    return Card(
+      key: const ValueKey('in room'),
+      margin: const EdgeInsets.only(bottom: 16),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              ended && client != null ? roomEndedText(s, client) : s.inRoom(code),
+              style: theme.textTheme.titleSmall,
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ended
+                  ? FilledButton(key: const ValueKey('room ok'), onPressed: rooms.dismiss, child: Text(s.ok))
+                  : OutlinedButton.icon(
+                      key: ValueKey(host ? 'close room' : 'leave room'),
+                      onPressed: () => _askToLeave(context, rooms),
+                      icon: Icon(host ? Icons.cancel_outlined : Icons.logout, size: 18),
+                      label: Text(host ? s.closeRoom : s.leaveRoom),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _askToLeave(BuildContext context, RoomService rooms) async {
+    final s = S.of(context);
+    final host = rooms.isHost;
+    final client = rooms.client;
+    final seated = client != null && (client.mySeat != null || client.queuedSeat != null);
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(host ? s.closeRoomQuestion : s.leaveRoomQuestion),
+        content: host || seated ? Text(s.leaveWarning(host: host)) : null,
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(s.cancel)),
+          FilledButton(
+            key: ValueKey(host ? 'close room sure' : 'leave room sure'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(host ? s.closeRoom : s.leaveRoom),
+          ),
+        ],
+      ),
+    );
+    if (sure == true) await rooms.leave();
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = S.of(context);
     final theme = Theme.of(context);
-    final busy = _busy != null;
+    final rooms = RoomScope.maybeOf(context);
+    // In a room already: one at a time (greyed out until it is left).
+    final inRoom = rooms?.inRoom ?? false;
+    final busy = _busy != null || inRoom;
     final creating = _code.text.trim().isEmpty;
     return Scaffold(
       appBar: AppBar(
@@ -382,6 +446,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
             shrinkWrap: true,
             children: [
+              if (inRoom) _inRoom(context, rooms!),
               TextField(
                 key: const ValueKey('online name'),
                 controller: _name,
@@ -410,7 +475,7 @@ class _OnlineScreenState extends State<OnlineScreen> {
                 onSubmitted: (_) => _go(),
               ),
               const SizedBox(height: 16),
-              if (busy)
+              if (_busy != null)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [

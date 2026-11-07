@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app/app_settings.dart';
-import '../app/drills.dart';
+// Drills are off for now: uncomment to bring them back.
+// import '../app/drills.dart';
 import '../bots/bot.dart';
 import '../engine/actions.dart';
 import '../engine/poker_hand.dart';
@@ -13,15 +14,17 @@ import '../game/table_session.dart';
 import '../gto/gto_solutions.dart';
 import '../online/protocol.dart' show ChatLine;
 import 'decision_panel.dart';
-import 'drill_screen.dart';
+// Drills are off for now: uncomment to bring them back.
+// import 'drill_screen.dart';
 import 'format.dart';
 import '../l10n/strings.dart';
 import 'glossary.dart';
 import 'history_screen.dart';
 import 'online/chat.dart';
-import 'online/invite_dialog.dart';
-import 'online/lobby_screen.dart';
-import 'online/room_widgets.dart';
+import 'online/room_game_frame.dart';
+import 'online/room_scope.dart';
+import 'online/room_seats_panel.dart';
+import 'online/spectator_coach.dart';
 import 'range_screen.dart';
 import 'table_controller.dart';
 import 'table_geometry.dart';
@@ -37,11 +40,13 @@ class TableScreen extends StatefulWidget {
     this.speed = PlaybackSpeed.normal,
     this.solutions,
     this.controller,
-  });
+  }) : ownsController = true;
 
   /// An online table, already set up: its controller (see
-  /// OnlineTableController), which the screen then owns.
-  TableScreen.online({super.key, required OnlineTableController this.controller})
+  /// OnlineTableController), which the screen owns unless the app's room
+  /// does ([ownsController] false: RoomService, which keeps the game
+  /// going while the table is off screen).
+  TableScreen.online({super.key, required OnlineTableController this.controller, this.ownsController = true})
       : config = controller.session.config,
         speed = controller.speed,
         solutions = null;
@@ -51,7 +56,8 @@ class TableScreen extends StatefulWidget {
   TableScreen.drills({super.key, required DrillController this.controller})
       : config = controller.session.config,
         speed = controller.speed,
-        solutions = null;
+        solutions = null,
+        ownsController = true;
 
   final TableConfig config;
   final PlaybackSpeed speed;
@@ -61,6 +67,10 @@ class TableScreen extends StatefulWidget {
 
   /// Runs the table, if not a new one on this device (online).
   final TableController? controller;
+
+  /// The screen disposes [controller] (and online, closes its connection)
+  /// when it goes; false for the app's room, which keeps both.
+  final bool ownsController;
 
   @override
   State<TableScreen> createState() => _TableScreenState();
@@ -72,13 +82,14 @@ class _TableScreenState extends State<TableScreen> {
   /// [_cornerGap] from the edges.
   static const _cornerMinWidth = 900.0, _cornerMinHeight = 600.0, _cornerGap = 12.0;
 
-  // Training saves each mistake to the drills.
   late final TableController _controller = widget.controller ??
       TableController(
         widget.config,
         speed: widget.speed,
         solutions: widget.solutions,
-        drills: widget.config.guessGto ? Drills.read(context) : null,
+        // Training saves each mistake to the drills.
+        // Drills are off for now: uncomment to bring them back.
+        // drills: widget.config.guessGto ? Drills.read(context) : null,
       );
   final _panel = GlobalKey<DecisionPanelState>();
 
@@ -109,11 +120,17 @@ class _TableScreenState extends State<TableScreen> {
   bool _chatOpen = false;
   int _chatSeen = 0;
 
-  /// Online: back on screen, a dropped connection is tried again at once.
+  /// Online: back on screen, a dropped connection is tried again at once
+  /// (the app's room does it when it owns the controller).
   AppLifecycleListener? _lifecycle;
 
-  /// Online, once the game is over: back to the room's lobby when it fires.
-  Timer? _toLobby;
+  /// Online, the room's tabs beside the table (☰ > Room switches to it).
+  final _frame = GlobalKey<RoomGameFrameState>();
+
+  /// Online, Leave seat was pressed: the table closes once the seat is free
+  /// (at once between hands, else when the hand ends).
+  bool _popWhenSpectator = false;
+  StreamSubscription<void>? _seatChanges;
 
   @override
   void initState() {
@@ -125,9 +142,24 @@ class _TableScreenState extends State<TableScreen> {
       _controller.startNextHand();
     } else {
       _toasts = online.toasts.listen(_showToast);
-      _lifecycle = AppLifecycleListener(onResume: online.client.reconnectNow);
+      if (widget.ownsController) _lifecycle = AppLifecycleListener(onResume: online.client.reconnectNow);
       _chatSeen = online.client.chat.lastOrNull?.n ?? 0;
+      // On screen: its sounds play, and a spectator's coach works.
+      online.onScreen = true;
+      _seatChanges = online.client.changes.listen((_) => _popIfSpectator());
     }
+  }
+
+  /// After Leave seat: the table closes as soon as the seat is free.
+  void _popIfSpectator() {
+    final online = _online;
+    if (!_popWhenSpectator || !mounted || online == null || online.client.mySeat != null) return;
+    _popWhenSpectator = false;
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isActive) return;
+    final navigator = Navigator.of(context);
+    navigator.popUntil((r) => r == route);
+    navigator.pop();
   }
 
   @override
@@ -137,23 +169,22 @@ class _TableScreenState extends State<TableScreen> {
     for (final note in _notes) {
       note.timer.cancel();
     }
-    _toLobby?.cancel();
+    unawaited(_seatChanges?.cancel());
     _lifecycle?.dispose();
-    _controller.dispose();
+    _online?.onScreen = false;
+    if (widget.ownsController) _controller.dispose();
     super.dispose();
   }
 
-  /// "Alice used GTO help", "Bob looked at your cards", "Bob was removed",
-  /// or that the host changed the rules: for 3 s at the top of the table
-  /// (see [_TableNotes]); another player's chat message for 4 s. Once the
-  /// game is over, who won shows over the table for 4 s (anything open over
-  /// it, such as the lobby of a player out of chips, closes first), then
-  /// everyone is back in the room's lobby.
+  /// "Alice used GTO help", "Bob showed A♠ K♠", "Bob was removed", or
+  /// that the host changed the rules: for 3 s at the top of the table (see
+  /// [_TableNotes]); another player's chat message for 4 s. Once the game
+  /// is over, who won shows over the table (anything open over it closes
+  /// first); the app's room then closes the table after a moment.
   void _showToast(OnlineToast toast) {
     if (!mounted) return;
     if (toast.over != null) {
       _toTable();
-      _toLobby ??= Timer(const Duration(seconds: 4), _backToLobby);
       return;
     }
     final line = toast.chat;
@@ -198,30 +229,18 @@ class _TableScreenState extends State<TableScreen> {
     });
   }
 
-  /// The game is over: the room's lobby takes the connection back, in place
-  /// of the table (and of anything open over it). Unless the room closed
-  /// meanwhile: then the table says so.
-  void _backToLobby() {
-    final online = _online;
-    if (!mounted || online == null || online.ended) return;
-    _toTable();
-    final client = online.handBack();
-    Navigator.of(context).pushReplacement(MaterialPageRoute<void>(builder: (_) => LobbyScreen(client: client)));
-  }
-
   /// Closes whatever is open over the table.
   void _toTable() {
     final table = ModalRoute.of(context);
-    if (table != null) Navigator.of(context).popUntil((route) => route == table);
+    if (table != null && table.isActive) Navigator.of(context).popUntil((route) => route == table);
   }
 
-  /// Online, out of chips: the room's lobby over the table, which follows
-  /// the game underneath (Watch comes back to it).
-  Future<void> _openLobby(BuildContext context, OnlineTableController online) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => LobbyScreen(client: online.client, overTable: true)),
-    );
-    // Its chat was on screen.
+  /// Online, from ☰ (or out of chips): the Room tab beside the table, with
+  /// the room's seats, spectators, chat and rules, live; the host changes
+  /// the bots, the help, the time and the switch from it (from the next
+  /// hand), and removes members.
+  void _openRoom(OnlineTableController online) {
+    _frame.currentState?.showRoom();
     _chatSeen = online.client.chat.lastOrNull?.n ?? _chatSeen;
   }
 
@@ -274,65 +293,14 @@ class _TableScreenState extends State<TableScreen> {
     _chatSeen = online.client.chat.lastOrNull?.n ?? _chatSeen;
   }
 
-  /// Online, a click on a seat: that player's range (with help on), or a
-  /// look at their cards (when the host allows it; greyed out otherwise).
-  Future<void> _onlineSeat(BuildContext context, OnlineTableController online, int seat) async {
-    // The session's copy of the hand may still be on the last one (or sit out a hand the user watches).
-    final help = _controller.guessGto;
-    final ranges = help && !online.watching && _controller.session.hand?.handNumber == online.handNumber;
-    if (online.isUserSeat(seat)) {
-      if (ranges) _openRange(context, seat);
-      return;
-    }
-    // Without help it is player against player: no ranges, only a look at
-    // the cards when the host allows it.
-    if (!help && !online.canPeek(seat)) return;
-    final s = S.of(context);
-    final name = _controller.view.seats[seat].info.name;
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(title: Text(name, style: Theme.of(context).textTheme.titleMedium)),
-            if (help)
-              ListTile(
-                leading: const Icon(Icons.grid_view),
-                title: Text(s.showRange),
-                enabled: ranges,
-                onTap: () => Navigator.of(context).pop('range'),
-              ),
-            ListTile(
-              key: const ValueKey('see cards'),
-              leading: const Icon(Icons.visibility),
-              title: Text(s.seeCards),
-              enabled: online.canPeek(seat),
-              trailing: const HelpButton(section: GlossarySection.online, terms: [GlossaryTerm.seeCards]),
-              onTap: () => Navigator.of(context).pop('cards'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (!context.mounted) return;
-    switch (choice) {
-      case 'range':
-        _openRange(context, seat);
-      case 'cards':
-        // Everyone is told: ask first.
-        final sure = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            content: Text(s.seeCardsQuestion(name)),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(s.cancel)),
-              FilledButton(onPressed: () => Navigator.of(context).pop(true), child: Text(s.seeCards)),
-            ],
-          ),
-        );
-        if (sure == true) online.peek(seat);
-    }
+  /// Online, a click on a seat: that player's range, with help on, when
+  /// the session follows the hand on screen (a spectator's session follows
+  /// every hand; a seated player's sits out a hand they watch). Without
+  /// help it is player against player: nothing to open.
+  void _onlineSeat(BuildContext context, OnlineTableController online, int seat) {
+    final ranges =
+        _controller.guessGto && !online.watching && _controller.session.hand?.handNumber == online.handNumber;
+    if (ranges) _openRange(context, seat);
   }
 
   /// With a strategy to enter (or online, one on its way), the buttons in
@@ -522,77 +490,6 @@ class _TableScreenState extends State<TableScreen> {
     _controller.setStyle(seat, picked.$1);
   }
 
-  /// Online: the room as everyone sees it, live: who has each seat and the
-  /// rules. The host adds or takes away bots, removes players (a tap on
-  /// their seat) and changes the help, the time limit and what players may
-  /// see (from the next hand); the table itself stays as set in the lobby.
-  /// Greyed out for everyone else.
-  Future<void> _tableSettings(BuildContext context, OnlineTableController online) async {
-    final s = S.of(context);
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => StreamBuilder<void>(
-        stream: online.client.changes,
-        builder: (context, _) {
-          final room = online.client.room;
-          final host = online.isHost && !online.ended;
-          final theme = Theme.of(context);
-          return SafeArea(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.85),
-              child: ListView(
-                shrinkWrap: true,
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                children: [
-                  Row(
-                    children: [
-                      Text(s.tableSettings, style: theme.textTheme.titleMedium),
-                      const HelpButton(section: GlossarySection.online, terms: [GlossaryTerm.host]),
-                    ],
-                  ),
-                  Text(s.fromNextHand, style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60)),
-                  // Friends can still join (from the next hand).
-                  if (room != null && !online.ended) ...[
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        FilledButton.tonalIcon(
-                          onPressed: () => showInvite(context, online.client, room.code),
-                          icon: const Icon(Icons.share),
-                          label: Text(s.invite),
-                        ),
-                        if (online.client.host case final roomHost?) WaysIn(host: roomHost),
-                      ],
-                    ),
-                  ],
-                  if (room != null) ...[
-                    RoomSection(
-                      title: s.players,
-                      child: RoomSeats(
-                        room: room,
-                        mySeat: online.client.mySeat,
-                        host: host,
-                        onAdd: (style) => online.addBot(style),
-                        onStyle: online.setBotStyle,
-                        onRemove: online.removeBot,
-                        onRemovePlayer: online.removePlayer,
-                      ),
-                    ),
-                    RoomRules(room: room, host: host, onChange: online.changeSettings),
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
   /// Everything the top bar offers, behind one ☰ button.
   Widget _menu(BuildContext context) {
     final session = _controller.session;
@@ -607,23 +504,24 @@ class _TableScreenState extends State<TableScreen> {
             _controller.toggleAllCards();
           case 'players':
             _players(context);
-          case 'table':
-            if (online != null) _tableSettings(context, online);
+          case 'room':
+            if (online != null) _openRoom(online);
           case 'chat':
             if (online != null) _chat(context, online);
           case 'sitOut':
             online?.sitOut(!online.sitsOut);
           case 'history':
             Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => HistoryScreen(session: session)));
-          case 'spots':
-            if (_drill case final drill?) {
-              Navigator.of(context)
-                  .push(MaterialPageRoute<void>(builder: (_) => SavedSpotsScreen(drills: drill.drills)));
-            }
+          // Drills are off for now: uncomment to bring them back.
+          // case 'spots':
+          //   if (_drill case final drill?) {
+          //     Navigator.of(context)
+          //         .push(MaterialPageRoute<void>(builder: (_) => SavedSpotsScreen(drills: drill.drills)));
+          //   }
           case 'glossary':
             Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const GlossaryScreen()));
-          case 'close':
-            online?.closeRoom();
+          case 'close' || 'leave room':
+            if (online != null) _leaveRoom(context, online);
           case 'leave':
             _leave(context);
         }
@@ -637,14 +535,13 @@ class _TableScreenState extends State<TableScreen> {
               child: Row(children: [Icon(icon, size: 20), const SizedBox(width: 12), Flexible(child: Text(text))]),
             );
         return [
-          // First: the table itself (online, its seats, bots and rules; here,
-          // the players' stacks, styles and cards). Online without help,
-          // only the host has it (player against player). Drills deal each
-          // hand at its own table: greyed out.
+          // First: the table itself (online, the room: its game, seats,
+          // spectators, bots and rules; here, the players' stacks, styles and
+          // cards). Drills deal each hand at its own table: greyed out.
           if (online == null)
             item('players', Icons.tune, s.editTable, enabled: _drill == null)
-          else if (online.isHost || training)
-            item('table', Icons.tune, s.editTable),
+          else
+            item('room', Icons.groups_outlined, s.lobby),
           // Online, cards stay hidden and the host picks the help (see the glossary).
           if (training)
             item('cards', _controller.allCardsShown ? Icons.visibility_off : Icons.visibility,
@@ -653,7 +550,8 @@ class _TableScreenState extends State<TableScreen> {
           // The scores of past hands: only with help on.
           if (training) item('history', Icons.history, s.history),
           // Drills: every saved spot, with when it is due.
-          if (_drill != null) item('spots', Icons.event_repeat, s.savedSpots),
+          // Drills are off for now: uncomment to bring them back.
+          // if (_drill != null) item('spots', Icons.event_repeat, s.savedSpots),
           // Online, the room's chat, with how many messages came since it was last open.
           if (online != null)
             item('chat', Icons.chat_bubble_outline, switch (_unreadChat(online)) {
@@ -668,7 +566,9 @@ class _TableScreenState extends State<TableScreen> {
           const PopupMenuDivider(),
           item('glossary', Icons.help_outline, s.glossary),
           if (online != null && online.isHost && !online.ended) item('close', Icons.cancel_outlined, s.closeRoom),
-          item('leave', Icons.home_outlined, online == null ? s.mainMenu : s.leave),
+          if (online != null && !online.isHost && !online.ended)
+            item('leave room', Icons.no_meeting_room_outlined, s.leaveRoom),
+          item('leave', Icons.logout, s.leave),
         ];
       },
     );
@@ -678,25 +578,71 @@ class _TableScreenState extends State<TableScreen> {
   int _unreadChat(OnlineTableController online) =>
       online.client.chat.where((line) => line.n > _chatSeen && !line.you).length;
 
-  /// Leaves the table; online, after asking (the seat is empty from the
-  /// next hand).
+  /// Online, whether the user has a seat: then leaving the table asks
+  /// first.
+  bool _seated(OnlineTableController online) => !online.ended && online.client.mySeat != null;
+
+  /// Leaves the table. A spectator goes at once (the game goes on: Watch
+  /// comes back to it). A seated player is asked first, and gives the seat
+  /// up: the table closes once it is free (between hands at once, else
+  /// when they have played the hand out, so nobody waits for their turn).
   Future<void> _leave(BuildContext context) async {
     final online = _online;
-    if (online != null && !online.ended) {
+    if (online != null && _seated(online)) {
       final s = S.of(context);
       final sure = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(s.leaveTable),
-          content: Text(s.leaveWarning(host: online.isHost)),
+          title: Text(s.leaveSeatQuestion),
+          content: Text(s.leaveSeatWarning),
           actions: [
             TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(s.cancel)),
-            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: Text(s.leave)),
+            FilledButton(
+              key: const ValueKey('leave seat sure'),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: Text(s.leaveSeat),
+            ),
           ],
         ),
       );
       if (sure != true || !context.mounted) return;
+      _popWhenSpectator = true;
+      online.leaveSeat();
+      _popIfSpectator();
+      return;
     }
+    Navigator.of(context).pop();
+  }
+
+  /// Close Room (the host: for everyone) or Leave Room, asked first. The
+  /// app's room does it (the table closes with it); a table shown alone
+  /// closes its connection and itself.
+  Future<void> _leaveRoom(BuildContext context, OnlineTableController online) async {
+    final s = S.of(context);
+    final host = online.isHost;
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(host ? s.closeRoomQuestion : s.leaveRoomQuestion),
+        content: host || online.client.mySeat != null ? Text(s.leaveWarning(host: host)) : null,
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(s.cancel)),
+          FilledButton(
+            key: ValueKey(host ? 'close room sure' : 'leave room sure'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(host ? s.closeRoom : s.leaveRoom),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !context.mounted) return;
+    final rooms = RoomScope.maybeOf(context);
+    if (rooms != null && rooms.client == online.client) {
+      await rooms.leave();
+      return;
+    }
+    if (host) online.closeRoom();
+    unawaited(online.client.close());
     Navigator.of(context).pop();
   }
 
@@ -736,7 +682,7 @@ class _TableScreenState extends State<TableScreen> {
             backgroundColor: const Color(0xFF12171B),
             // Phones are played sideways: keep the bar slim when height is short.
             toolbarHeight: MediaQuery.sizeOf(context).height < 500 ? 44 : null,
-            // Leaving the table is in the menu (Main Menu), not a back arrow.
+            // Leaving the table is in the menu (Leave), not a back arrow.
             automaticallyImplyLeading: false,
             title: Text(switch (_controller) {
               final OnlineTableController online => s.room(online.roomCode),
@@ -764,12 +710,14 @@ class _TableScreenState extends State<TableScreen> {
                           ),
                   ),
                 ),
+              // A spectator turns the coach on or off, on this device.
+              if (_online case final online? when online.spectating) SpectatorCoachChip(controller: online),
               _menu(context),
             ],
           ),
           body: PopScope(
-            // Online, leaving asks first (the back gesture too).
-            canPop: _online == null || _online!.ended,
+            // Online, a seated player is asked first (the back gesture too).
+            canPop: _online == null || !_seated(_online!),
             onPopInvokedWithResult: (didPop, _) {
               if (!didPop) _leave(context);
             },
@@ -786,8 +734,11 @@ class _TableScreenState extends State<TableScreen> {
                     builder: (context, constraints) {
                       // A big wide screen (a PC): the table across all of it, and
                       // the decisions in a card in the bottom-right corner, which
-                      // the seats keep clear of.
-                      final corner = constraints.maxWidth >= constraints.maxHeight &&
+                      // the seats keep clear of. Online, the room's two tabs sit
+                      // beside the table instead.
+                      final online = _online;
+                      final corner = online == null &&
+                          constraints.maxWidth >= constraints.maxHeight &&
                           constraints.maxWidth >= _cornerMinWidth &&
                           constraints.maxHeight >= _cornerMinHeight;
                       final card = Size(
@@ -838,15 +789,26 @@ class _TableScreenState extends State<TableScreen> {
                             Positioned.fill(child: _GameOverBanner(text: _gameOverText(s, online))),
                         ],
                       );
+                      // Online: the table, and beside it (under it, upright) the
+                      // Game tab (the player's choices, or a spectator's coach and
+                      // Join game) and the Room tab.
+                      if (online != null) {
+                        return RoomGameFrame(
+                          key: _frame,
+                          table: table,
+                          // The room's seats and the host's End game, on the table's top edge.
+                          tableBar: RoomTableBar(client: online.client),
+                          client: online.client,
+                          game: online.spectating
+                              ? SpectatorPanel(controller: online)
+                              : DecisionPanel(key: _panel, controller: _controller, onLobby: () => _openRoom(online)),
+                        );
+                      }
                       final panel = DecisionPanel(
                         key: _panel,
                         controller: _controller,
                         // One row of buttons when there's width to spare.
                         compact: constraints.maxWidth >= constraints.maxHeight,
-                        onLobby: switch (_online) {
-                          final online? => () => _openLobby(context, online),
-                          null => null,
-                        },
                       );
                       if (corner) {
                         return Stack(

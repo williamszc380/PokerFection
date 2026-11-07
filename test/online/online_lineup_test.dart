@@ -16,8 +16,8 @@ import '../widget_test.dart' show setScreen, testSolutions;
 
 void main() {
   // The server runs in the test, on a clock the test moves (no real sockets).
-  testWidgets('the players change between hands: a guest joins and leaves, the host adds and takes away bots, '
-      'looks are told to everyone', (tester) async {
+  testWidgets('the players change between hands: a guest joins and leaves, the host adds and takes away bots; '
+      "watching first, the guest sees the people's cards, not the bot's", (tester) async {
     setScreen(tester, const Size(1280, 900));
     final clock = ManualClock();
     final registry = RoomRegistry(clock: clock, random: Random(7));
@@ -33,12 +33,13 @@ void main() {
       await tester.pump(time);
     }
 
-    // A room with one bot; players may look at others' cards.
+    // A room with one bot.
     final opening = client.open(
       const CreateRoom(
         name: 'Ann',
+        game: holdemKey,
         // Stacks reset every hand: nobody runs out of chips here.
-        settings: RoomSettings(seats: 4, stackBb: 20, resetStacks: true, showCards: true),
+        settings: RoomSettings(seats: 4, stackBb: 20, resetStacks: true),
         bots: {1: 'tag'},
       ),
     );
@@ -46,6 +47,7 @@ void main() {
     final code = (await opening).code;
     NextHand? first;
     client.attach((m) => first ??= m is NextHand ? m : null);
+    client.send(const TakeSeat());
     client.send(const StartGame());
     for (var i = 0; first == null && i < 20; i++) {
       await wait();
@@ -92,18 +94,29 @@ void main() {
 
     await playUntil(() => controller.session.handsFinished >= 1, 'a hand with the bot');
     guest.send(JoinRoom(code: code, name: 'Ben').encode());
-    await playUntil(() => controller.playerCount == 3, 'the guest sat down');
 
-    // The host looks at the guest's cards while the hand is on: only the host gets them, everyone is told.
-    final ben = controller.view.seats.indexWhere((seat) => seat.info.name == 'Ben');
-    await playUntil(() => controller.canPeek(ben), 'a hand to look in');
-    controller.peek(ben);
-    await playUntil(() => seen.whereType<Notice>().isNotEmpty, 'the guest was told');
-    final notice = seen.whereType<Notice>().single;
-    expect((notice.kind, notice.name, notice.targetName), (NoticeKind.peek, 'Ann', 'Ben'));
-    expect(seen.whereType<PeekCards>(), isEmpty);
-    final dealt = seen.whereType<HandDealt>().last.batch.whereType<HoleCardsDealt>().single.cards;
-    expect(controller.view.seats[ben].cards, dealt[guestSeat]);
+    // The guest watches first: a hand dealt to the host and the bot shows the host's cards (a person's), not the
+    // bot's (the host hasn't let spectators see them).
+    await playUntil(() => seen.whereType<HandDealt>().isNotEmpty, 'a hand watched');
+    final watched = seen.whereType<HandDealt>().first;
+    final lineup = [
+      ...seen.whereType<NextHand>(),
+      for (final snapshot in seen.whereType<Snapshot>()) ?snapshot.next,
+    ].lastWhere((next) => next.hand == watched.hand);
+    expect(lineup.you, isNull);
+    expect(watched.batch.whereType<HoleCardsDealt>().single.cards.keys, [
+      for (final (i, seat) in lineup.seats.indexed)
+        if (seat.kind == SeatKind.human) i,
+    ]);
+    expect(lineup.seats.map((s) => s.kind), containsAll([SeatKind.human, SeatKind.bot]));
+
+    // Seated, from the next hand: only the guest's own cards from then on.
+    guest.send(const TakeSeat().encode());
+    await playUntil(() => controller.playerCount == 3, 'the guest sat down');
+    NextHand? seated() => seen.whereType<NextHand>().where((next) => next.you != null).firstOrNull;
+    HandDealt? dealtSeated() => seen.whereType<HandDealt>().where((d) => d.hand == seated()?.hand).firstOrNull;
+    await playUntil(() => dealtSeated() != null, 'a hand seated');
+    expect(dealtSeated()!.batch.whereType<HoleCardsDealt>().single.cards.keys, [seated()!.you]);
 
     // The host takes the bot away (from the next hand): the host and the guest play on.
     controller.removeBot(1);

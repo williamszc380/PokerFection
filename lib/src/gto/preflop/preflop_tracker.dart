@@ -151,6 +151,19 @@ class PreflopTracker {
     return root is PreflopDecision ? subgame.spotAt(root, hand) : null;
   }
 
+  /// The solved whole game's answer for whoever acts (online, a spectator's
+  /// coach): the blueprint's menu, not a subgame's, so it costs no solve
+  /// beyond the whole game. Null once the hand has left the solved lines,
+  /// or when this device doesn't know the actor's cards.
+  SpotStrategy? blueprintSpotFor(PokerHand hand) {
+    final seat = hand.toAct;
+    if (hand.street != Street.preflop || seat == null) return null;
+    final walk = _walk(hand);
+    final node = walk?.node;
+    if (node is! PreflopDecision || node.player != PreflopAdvisor.orderOf(hand, seat)) return null;
+    return walk!.game.spotAt(node, hand);
+  }
+
   /// A move for the bot to act, drawn from the solved strategy; null once
   /// the hand has left the solved lines.
   PlayerAction? sample(PokerHand hand, Random random) {

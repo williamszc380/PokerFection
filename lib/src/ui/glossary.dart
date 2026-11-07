@@ -1,8 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../l10n/strings.dart';
+import 'online/room_scope.dart';
 
 export '../l10n/strings.dart' show GlossarySection, GlossaryTerm;
+
+/// The glossary's entries, in order: of one [section], or of all; those
+/// of features that are off for now left out.
+Iterable<GlossaryTerm> glossaryTerms([GlossarySection? section]) => GlossaryTerm.values
+    .where((term) => (section == null || term.section == section) && !_turnedOff.contains(term));
+
+const _turnedOff = <GlossaryTerm>{
+  // Drills are off for now: delete this line to bring them back.
+  GlossaryTerm.drills,
+};
 
 /// A small "?" next to a setting or heading: shows the glossary entries of
 /// [section], or just [terms] (from any section), with a link to the whole
@@ -29,6 +40,7 @@ class _HelpButtonState extends State<HelpButton> {
       padding: const EdgeInsets.symmetric(horizontal: 2),
       child: InkWell(
         customBorder: const CircleBorder(),
+        mouseCursor: WidgetStateMouseCursor.clickable,
         hoverColor: accent.withValues(alpha: 0.2),
         onHover: (hovered) => setState(() => _hovered = hovered),
         onTap: () => _open(context),
@@ -40,13 +52,14 @@ class _HelpButtonState extends State<HelpButton> {
     );
   }
 
-  /// Shows the section's entries (or just the chosen terms).
+  /// Shows the section's entries (or just the chosen terms): over the
+  /// screen, also from the room docked beside it (see roomDialogContext).
   void _open(BuildContext context) {
     final s = S.of(context);
     final section = widget.section;
-    final entries = widget.terms ?? [for (final term in GlossaryTerm.values) if (term.section == section) term];
+    final entries = widget.terms ?? glossaryTerms(section).toList();
     showDialog<void>(
-      context: context,
+      context: roomDialogContext(context),
       builder: (context) => AlertDialog(
         title: Text(s.section(section)),
         content: SizedBox(
@@ -127,8 +140,7 @@ class GlossaryScreen extends StatelessWidget {
                     style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.primary),
                   ),
                 ),
-                for (final term in GlossaryTerm.values)
-                  if (term.section == section) GlossaryEntry(term: term),
+                for (final term in glossaryTerms(section)) GlossaryEntry(term: term),
               ],
             ],
           ),

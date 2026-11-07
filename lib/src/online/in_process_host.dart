@@ -42,6 +42,10 @@ class InProcessHost implements RoomHost {
       clock: clock,
       random: random,
       maxRooms: 1,
+      // A browser also runs the room and the bots, on top of the game: fewer members.
+      roomCap: RoomRegistry.smallRoomCap,
+      // The room lives as long as this page does (until the host closes it): it never idles out.
+      roomIdle: null,
       log: log,
       nextCode: () => host.peerCode,
       atMeetingService: (code) => host.peerCode == code,

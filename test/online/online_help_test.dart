@@ -35,6 +35,7 @@ void main() {
     final opening = client.open(
       const CreateRoom(
         name: 'Ann',
+        game: holdemKey,
         settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true, help: HelpLevel.simple),
         bots: {1: 'gto', 2: 'gto'},
       ),
@@ -43,6 +44,7 @@ void main() {
     await opening;
     NextHand? first;
     client.attach((m) => first ??= m is NextHand ? m : null);
+    client.send(const TakeSeat());
     client.send(const StartGame());
     for (var i = 0; first == null && i < 20; i++) {
       await wait();

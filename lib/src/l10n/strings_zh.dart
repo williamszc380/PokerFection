@@ -8,6 +8,7 @@ import '../gto/spot_strategy.dart';
 import '../online/protocol.dart' show CloseReason, JoinError;
 import '../online/peer_status.dart' show PeerPhase, PeerStatus, PeerTrouble;
 import '../ui/table_controller.dart' show OnlineNotice, PlaybackSpeed;
+import '../app/app_settings.dart' show BoardStyle, StoneStyle;
 import 'strings.dart';
 
 class StringsZh extends S {
@@ -17,6 +18,41 @@ class StringsZh extends S {
   String get play => '开始游戏';
   @override
   String get settings => '设置';
+
+  @override
+  String get holdem => '德州扑克';
+  @override
+  String get gomoku => '五子棋';
+  @override
+  String get bigTwo => '锄大地';
+  @override
+  String get fightTheLandlord => '斗地主';
+  @override
+  String get blackjack => '二十一点';
+  @override
+  String get soon => '即将推出';
+  @override
+  String get general => '通用';
+  @override
+  String get cardsAndTable => '牌与牌桌';
+  @override
+  String get boardAndStones => '棋盘与棋子';
+  @override
+  String get boardColor => '棋盘';
+  @override
+  String get stoneLook => '棋子';
+  @override
+  String boardStyle(BoardStyle style) => switch (style) {
+        BoardStyle.lightWood => '浅色木纹',
+        BoardStyle.darkWood => '深色木纹',
+        BoardStyle.green => '绿色',
+        BoardStyle.gray => '灰色',
+      };
+  @override
+  String stoneStyle(StoneStyle style) => switch (style) {
+        StoneStyle.glossy => '光泽',
+        StoneStyle.flat => '扁平',
+      };
 
   @override
   String get handRankings => '牌型大小';
@@ -111,8 +147,6 @@ class StringsZh extends S {
   @override
   String get editTable => '编辑牌桌';
   @override
-  String get solo => '单人';
-  @override
   String get multiplayer => '多人';
   @override
   String get guides => '指南';
@@ -180,8 +214,6 @@ class StringsZh extends S {
   String get history => '历史';
   @override
   String get shuffleStyles => '打乱打法风格';
-  @override
-  String get mainMenu => '主菜单';
   @override
   String get showRange => '范围';
   @override
@@ -446,7 +478,7 @@ class StringsZh extends S {
   String joinError(JoinError? error) => switch (error) {
         JoinError.upgrade => '请更新应用后再玩',
         JoinError.roomNotFound => '找不到房间',
-        JoinError.tableFull => '牌桌已满',
+        JoinError.roomFull => '房间已满',
         JoinError.rateLimited => '尝试太多次：请等一分钟',
         JoinError.serverFull => '服务器已满：请稍后再试',
         JoinError.internal => '服务器出错',
@@ -538,19 +570,84 @@ class StringsZh extends S {
   @override
   String get waitingForPlayers => '等待玩家（至少 2 名）';
   @override
-  String get allowSeeCards => '玩家可以看别人的牌';
+  String get joinGame => '加入游戏';
   @override
-  String get seeCards => '看牌';
+  String get leaveSeat => '离座';
   @override
-  String seeCardsQuestion(String name) => '查看 $name 的牌？所有人都会知道。';
+  String get spectators => '观众';
+  @override
+  String get spectatorsSeeBots => '观众可看机器人的牌';
+  @override
+  String get seatList => '座位';
+  @override
+  String get game => '游戏';
+  @override
+  String get endGame => '结束游戏';
+  @override
+  String get nextGameBadge => '下一局';
+  @override
+  String get updateToWatch => '更新应用后观看';
+  @override
+  String get leaveRoom => '离开房间';
+  @override
+  String get leaveRoomQuestion => '离开房间？';
+  @override
+  String get closeRoomQuestion => '关闭房间？';
+  @override
+  String get leaveSeatQuestion => '离开座位？';
+  @override
+  String get leaveSeatWarning => '先打完这一手。';
+  @override
+  String get pickGame => '选择游戏';
+  @override
+  String get waitingForGame => '等待房主选择游戏';
+  @override
+  String get seatsAfterGame => '选好游戏后出现座位。';
+  @override
+  String inRoom(String code) => '你在房间 $code 中。';
+  @override
+  String get leaveSeatWarningRound => '先打完这一局。';
+  @override
+  String needSeats(int n) => '这个游戏需要 $n 名玩家：邀请朋友或添加机器人。';
+  @override
+  String get people => '成员';
+  @override
+  String get playingNow => '在玩';
+  @override
+  String get pickGameOnHome => '在主页选择游戏。';
+  @override
+  String get onlineSoon => '即将联机';
+  @override
+  String get sit => '坐下';
+  @override
+  String get openTable => '打开牌桌';
+  @override
+  String get endGameFirst => '请先结束当前游戏。';
+  @override
+  String roomSetupNote(String code) => '房间 $code：将为房间里的所有人打开这个游戏。';
+  @override
+  String get about => '关于';
+  @override
+  String versionNumber(String version) => '版本 $version';
+  @override
+  String buildCommits(int commits, {required bool changed}) =>
+      changed ? '构建：$commits 次提交（含本地改动）' : '构建：$commits 次提交';
+  @override
+  String get devBuild => '构建：开发版';
+  @override
+  String madeBy(String name) => '作者：$name';
+  @override
+  String gamesList(String list) => '游戏：$list';
+  @override
+  String onlineRooms(int protocol) => '点对点在线房间（协议 v$protocol）';
+  @override
+  String runningOn(String platform) => '运行于 $platform';
   @override
   String get showMyCards => '亮出我的牌';
   @override
   String showNotice(String? name, String cards) => name == null ? '你亮牌：$cards' : '$name 亮牌：$cards';
   @override
   String helpNotice(String? name) => name == null ? '你使用了 GTO 辅助' : '$name 使用了 GTO 辅助';
-  @override
-  String peekNotice(String? name, String? target) => '${name ?? '你'}看了${target ?? '你'}的牌';
   @override
   String get rulesChanged => '房主更改了规则（从下一手开始）。';
   @override
@@ -702,12 +799,15 @@ class StringsZh extends S {
         GlossaryTerm.station => '跟注站',
         GlossaryTerm.nit => '极紧',
         GlossaryTerm.roomCode => '房间码',
+        GlossaryTerm.roomStays => '留在房间',
         GlossaryTerm.host => '房主',
         GlossaryTerm.hosting => '主持房间',
         GlossaryTerm.onlineBots => '机器人',
         GlossaryTerm.timeLimit => '时限',
         GlossaryTerm.helpLevel => '辅助',
-        GlossaryTerm.seeCards => '看牌',
+        GlossaryTerm.roomGame => '游戏',
+        GlossaryTerm.spectators => '观众',
+        GlossaryTerm.seeBots => '机器人的牌',
         GlossaryTerm.rebuys => '重新买入',
         GlossaryTerm.sitOut => '留座离桌',
         GlossaryTerm.chat => '聊天',
@@ -723,7 +823,7 @@ class StringsZh extends S {
             '它们各自的风格行动。',
         GlossaryTerm.play => '与机器人对战，不计分，就像真实牌局。',
         GlossaryTerm.drills => '你在 GTO 训练（简单或进阶）中的每个失误或严重失误都会存为一个局面：同一手牌，直到那个决策。'
-            '主菜单的“错题练习”会重新发出到期的局面，最逾期的先来，并像简单训练一样给你的打法评分；打完之前不能用“显示 GTO”。'
+            '“错题练习”会重新发出到期的局面，最逾期的先来，并像简单训练一样给你的打法评分；打完之前不能用“显示 GTO”。'
             '打对了（良好或更好），这个局面会越来越晚才回来：1 小时、1 天、3 天、1 周，之后每次约延长 2.5 倍。'
             '打错了（或在训练中再犯同样的失误），10 分钟后再练。局面无论练得多熟都会保留，最多 256 个：存满时先移除最熟的。'
             '没有到期的局面时，错题练习会在随机牌桌上发随机牌局，其中的失误也会加入错题练习。“☰ > 已存局面”列出全部局面。',
@@ -794,23 +894,28 @@ class StringsZh extends S {
         GlossaryTerm.station => '跟注站：跟注太多，很少加注。',
         GlossaryTerm.nit => '非常紧：只等强牌。',
         GlossaryTerm.roomCode => '标识在线房间的五个字符。朋友在“在线对战”中用它加入。',
-        GlossaryTerm.host => '创建房间的玩家：房间运行在其设备上。房主设置牌桌、辅助和时限，开始游戏，并操控机器人。'
-            '房主可以移出玩家：在房间里或“☰ > 编辑牌桌”中点击其座位，再选“移出”。对方立即离开（如果正在一手牌中，'
-            '则在这手结束时），并且无法再加入这个房间。房主离开后，房间关闭。',
+        GlossaryTerm.host => '创建房间的玩家：房间运行在其设备上。房主选择游戏，设置牌桌、辅助和时限，开始游戏，并操控机器人。'
+            '房主可以移出任何人：在房间里（牌桌上是“☰ > 房间”）点击其名字，再选“移出”。对方立即离开（如果正在一手牌中，'
+            '则在这手结束时），并且无法再加入这个房间。房主按“关闭房间”或退出应用时，房间结束。',
+        GlossaryTerm.roomStays => '你在房间里时，房间的成员和聊天会一直停在每个界面的右侧：玩游戏、看指南或改设置，你都还在房间里。'
+            '“离开房间”让你退出；房主的“关闭房间”会为所有人结束房间。',
+        GlossaryTerm.roomGame => '房主像平时一样选游戏：在主页点一个游戏，再点“开始游戏”。房间里的所有人都会来到它的牌桌，座位就在那里：'
+            '点“坐下”占一个座位。换一个游戏会让所有人回到观看。灰色的：暂时还不能在线玩。',
+        GlossaryTerm.spectators => '每个人进入房间时都是观众，可以看到每位真人玩家的牌和打法风格。“教练”显示当前行动者的最佳打法。'
+            '“加入游戏”会为下一轮占一个座位。',
+        GlossaryTerm.seeBots => '由房主决定：观众也能看到机器人的牌，从下一轮开始。',
         GlossaryTerm.hosting => '“创建房间”会在你的设备上开启房间：游戏通过房主的应用进行，不需要我们的游戏服务器。朋友用房间号'
             '或邀请加入：同一 Wi-Fi 下即使没有互联网也可以；在其他地方，一个免费的公共配对服务帮设备互相找到对方，之后游戏在'
             '设备之间直接进行，并且加密（有些网络，常见于移动数据，无法直接连接）。没有应用的朋友可以通过邀请在浏览器中玩。'
-            '房主离开或关闭应用时，房间结束。也可以在浏览器中主持：这时所有人都通过互联网加入，关闭标签页房间就会关闭。',
-        GlossaryTerm.onlineBots => '新房间里只有房主，其他座位都是空的。加入的朋友坐到空座位上，房主可以添加机器人'
-            '（各有打法风格）或将其移除。每手牌只发给有人的座位，所以至少需要 2 名玩家；人数不够时游戏会等待。'
-            '游戏中加入、离开、添加或移除机器人都从下一手开始生效，离开的玩家会留下一个空座位。',
+            '房主按“关闭房间”或退出应用时，房间结束。也可以在浏览器中主持：这时所有人都通过互联网加入，关闭标签页房间就会关闭。',
+        GlossaryTerm.onlineBots => '新房间还没有游戏；房主选好游戏后才出现座位，全都是空的。“加入游戏”会坐到空座位上'
+            '（或机器人的座位：机器人让座），房主可以添加机器人（各有打法风格）或将其移除。每手牌只发给有人的座位，'
+            '所以至少需要 2 名玩家；人数不够时游戏会等待。一手牌进行中加入、离开、添加或移除机器人都从下一手开始生效。',
         GlossaryTerm.timeLimit => '每位玩家做决定的时间。时间到时，能过牌就自动过牌，否则弃牌。不限：没有时间限制。',
         GlossaryTerm.helpLevel => '房主为全桌选择的辅助：无（像自由对战）、简单或进阶（像 GTO 训练）。'
             '在线时，其他玩家的牌保持隐藏。你的选项会立即显示，GTO 的答案计算完成后加入（计算中…）。'
             '选择后行动立即发出：评分显示时牌桌不会暂停；在答案出来前做出的行动会在答案出来后评分。'
             '有玩家按下“显示 GTO”时，所有人都会收到通知。',
-        GlossaryTerm.seeCards => '房主允许时，可以在一手牌中点击其他玩家的座位并选择“看牌”：直到这手牌结束，'
-            '他们的牌都会对你正面朝上。全桌都会知道谁看了谁的牌。',
         GlossaryTerm.rebuys => '玩家输光全部筹码后怎么办，由房主设置。开启重新买入：玩家选择“重新买入”（从下一手起再拿到初始筹码）'
             '或“离开”；机器人会自动重新买入。关闭重新买入：玩家出局（座位显示“出局”），可以在牌桌或房间里观战，也可以离开。'
             '只剩一名玩家有筹码、且没有人能重新买入时，游戏结束：所有人回到房间，房主按“开始”用新的筹码开始新一局。'
@@ -818,12 +923,12 @@ class StringsZh extends S {
         GlossaryTerm.sitOut => '“☰ > 留座离桌”：从下一手起不给你发牌，但你保留座位和筹码，并可以观战。'
             '“☰ > 我回来了”从下一手起重新给你发牌。拿到牌的玩家少于 2 个时，游戏会等待。'
             '连接断开整整一手牌的玩家会留座离桌，直到他回来。',
-        GlossaryTerm.chat => '房间里的所有人都可以聊天：在房间里，以及游戏中从“☰ > 聊天”（输光筹码观战时也可以）。新消息会在牌桌上方'
+        GlossaryTerm.chat => '房间里的所有人都可以聊天：在房间里，以及游戏中在“房间”标签或“☰ > 聊天”里（输光筹码观战时也可以）。新消息会在牌桌上方'
             '显示片刻，然后淡出；“☰ > 聊天”里有完整的对话和快捷消息（点一下就发送）。每条消息最多 256 个字符，每 8 秒最多 '
             '4 条。房间会保留最近 64 条消息：加入或回来的玩家都能看到。',
         GlossaryTerm.away => '连接断开的玩家会保留座位 2 分钟。在此期间，服务器会在 3 秒后替他过牌或弃牌（整整一手牌都不在的话，'
             '他会留座离桌，直到回来）；能玩的人少于 2 个时，'
             '游戏会等待。他的应用会自动重新连接并跟上这手牌；应用关掉了的话，可以在“在线对战”里回到房间。房主暂离时，'
-            '机器人只会过牌或弃牌；房主离开 2 分钟（或关闭应用），房间就会关闭。',
+            '机器人只会过牌或弃牌。在应用里主持的房间会一直等房主回来；在自己的服务器上，房主离开 2 分钟房间就会关闭。',
       };
 }

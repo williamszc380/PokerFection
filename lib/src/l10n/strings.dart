@@ -84,12 +84,15 @@ enum GlossaryTerm {
   station(GlossarySection.styles),
   nit(GlossarySection.styles),
   roomCode(GlossarySection.online),
+  roomStays(GlossarySection.online),
   host(GlossarySection.online),
   hosting(GlossarySection.online),
+  roomGame(GlossarySection.online),
+  spectators(GlossarySection.online),
+  seeBots(GlossarySection.online),
   onlineBots(GlossarySection.online),
   timeLimit(GlossarySection.online),
   helpLevel(GlossarySection.online),
-  seeCards(GlossarySection.online),
   rebuys(GlossarySection.online),
   sitOut(GlossarySection.online),
   chat(GlossarySection.online),
@@ -114,9 +117,30 @@ abstract class S {
         AppLanguage.chinese => const StringsZh(),
       };
 
-  // Main menu and settings.
+  // Home, the game menus and settings.
   String get play;
   String get settings;
+
+  /// The games on Home, by the names players know best in each language.
+  String get holdem;
+  String get gomoku;
+  String get bigTwo;
+  String get fightTheLandlord;
+  String get blackjack;
+
+  /// Under a game that isn't built yet (greyed out on Home).
+  String get soon;
+
+  /// Settings' groups: for every game, the card games, and Gomoku.
+  String get general;
+  String get cardsAndTable;
+  String get boardAndStones;
+
+  /// Gomoku's looks: the board's color and the stones'.
+  String get boardColor;
+  String get stoneLook;
+  String boardStyle(BoardStyle style);
+  String stoneStyle(StoneStyle style);
 
   // Hand rankings.
   String get handRankings;
@@ -189,8 +213,7 @@ abstract class S {
   /// The ☰ item (and sheet) for changing the table: players, stacks, styles.
   String get editTable;
 
-  /// Main menu: Play opens Solo and Multiplayer; Guides opens the guides.
-  String get solo;
+  /// Home's Multiplayer, and a game menu's Guides (which opens the guides).
   String get multiplayer;
   String get guides;
   String get stack;
@@ -221,7 +244,6 @@ abstract class S {
   String get ranges;
   String get history;
   String get shuffleStyles;
-  String get mainMenu;
   String get showRange;
   String get changeStyle;
   String get showTheirCards;
@@ -434,20 +456,81 @@ abstract class S {
   String get needPlayers;
   String get waitingForPlayers;
 
-  /// Looking at another player's cards: the host's setting, the seat's
-  /// button, and the question first (everyone is told).
-  String get allowSeeCards;
-  String get seeCards;
-  String seeCardsQuestion(String name);
+  /// The room (see GlossaryTerm.spectators): everyone enters as a
+  /// spectator; Join game takes a seat, Leave seat gives it up. Then the
+  /// room's seats and spectators, the host's game picker and switch, End
+  /// game, the badge of a seat taken from the next game (the games other
+  /// than Hold'em), and what an app without the room's game shows instead.
+  String get joinGame;
+  String get leaveSeat;
+  String get spectators;
+  String get spectatorsSeeBots;
+  String get seatList;
+  String get game;
+  String get endGame;
+  String get nextGameBadge;
+  String get updateToWatch;
+
+  /// The room the user is in, docked beside every screen (rooms v2): Leave
+  /// Room (a guest) and its question, Close Room's question, the question
+  /// when a seated player leaves the table, what the host does first (Pick a
+  /// game) and what a guest waits for meanwhile, the empty Seats part, and
+  /// Play Online's card while in a room.
+  String get leaveRoom;
+  String get leaveRoomQuestion;
+  String get closeRoomQuestion;
+  String get leaveSeatQuestion;
+  String get leaveSeatWarning;
+  String get pickGame;
+  String get waitingForGame;
+  String get seatsAfterGame;
+  String inRoom(String code);
+
+  /// The games other than Hold'em (rooms R4): a seated player leaving their
+  /// game's table plays the round out first (as [leaveSeatWarning] for a
+  /// hand).
+  String get leaveSeatWarningRound;
+
+  /// Why the host's Start is greyed out in another game: it needs [n]
+  /// players (and the rest is as [needPlayers]).
+  String needSeats(int n);
+
+  /// Rooms v2.1: the lobby beside every screen shows the people (those
+  /// [playingNow] in the room's game and the spectators) and the chat;
+  /// the host picks games on Home ([pickGameOnHome]), where the games not
+  /// playable online yet are greyed out in a room ([onlineSoon]). The
+  /// room's table: an empty seat's [sit]. Hold'em's setup while hosting:
+  /// its note ([roomSetupNote]), its button ([openTable]), and why that is
+  /// greyed out while a game is played ([endGameFirst]).
+  String get people;
+  String get playingNow;
+  String get pickGameOnHome;
+  String get onlineSoon;
+  String get sit;
+  String get openTable;
+  String get endGameFirst;
+  String roomSetupNote(String code);
+
+  /// Home's version, tapped: About, with the version ([version], the
+  /// corner's label, like "2.0.11+"), the build ([commits] commits, and
+  /// whether the code had uncommitted changes; a build without a label is
+  /// a development one), who made the app, the games ([list]), online play
+  /// (protocol [protocol]) and where it runs ([platform]).
+  String get about;
+  String versionNumber(String version);
+  String buildCommits(int commits, {required bool changed});
+  String get devBuild;
+  String madeBy(String name);
+  String gamesList(String list);
+  String onlineRooms(int protocol);
+  String runningOn(String platform);
 
   /// What everyone at the table is told: a player pressed Show GTO, or
-  /// looked at someone's cards (a null name is the user).
+  /// showed their cards (a null name is the user).
   String helpNotice(String? name);
-  String peekNotice(String? name, String? target);
   String note(HandNote note) => switch (note) {
         HandNote(shown: final cards?) =>
           showNotice(note.name, [for (final c in cards) '${c.rankLabel}${c.suitSymbol}'].join(' ')),
-        HandNote(peek: true) => peekNotice(note.name, note.target),
         _ => helpNotice(note.name),
       };
 
@@ -478,8 +561,8 @@ abstract class S {
   String get sitOutNextHand;
   String get youSitOut;
 
-  /// The host removes a player (their seat in the lobby or ☰ > Edit
-  /// Table): the choice, the question first, and what everyone else is
+  /// The host removes a member (their name in the room, also ☰ > Room at
+  /// the table): the choice, the question first, and what everyone else is
   /// told ([name] was removed).
   String get removePlayer;
   String removePlayerQuestion(String name);
@@ -494,8 +577,8 @@ abstract class S {
   String get noMessages;
   String get chatTooFast;
 
-  /// Mistake drills (see GlossaryTerm.drills): the main menu's button with
-  /// how many spots are due; what the table says when a mistake is saved
+  /// Mistake drills (see GlossaryTerm.drills), off for now but kept: the
+  /// game menu's button with how many spots are due; what the table says when a mistake is saved
   /// ([again]: the same spot was saved before; [wait] like "10 min"); and
   /// once a spot is played again, when it is back ([right]: played right,
   /// or wrong; null: it couldn't be graded).

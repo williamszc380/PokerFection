@@ -7,7 +7,9 @@ import 'package:pokerfection/src/engine/events.dart';
 import 'package:pokerfection/src/engine/rules.dart';
 import 'package:pokerfection/src/gto/spot_strategy.dart';
 import 'package:pokerfection/src/l10n/strings.dart';
+import 'package:pokerfection/src/online/protocol.dart' show JoinError;
 import 'package:pokerfection/src/online/peer_status.dart';
+import 'package:pokerfection/src/ui/games.dart';
 import 'package:pokerfection/src/ui/table_controller.dart' show PlaybackSpeed;
 
 /// Every way the lobby can show the internet (see PeerStatus).
@@ -52,26 +54,100 @@ void main() {
         s.cantReachServer,
         s.wsOnWebsite,
         s.cantHostInBrowser,
+        for (final style in BoardStyle.values) s.boardStyle(style),
+        for (final style in StoneStyle.values) s.stoneStyle(style),
+        s.holdem,
+        s.gomoku,
+        s.bigTwo,
+        s.fightTheLandlord,
+        s.blackjack,
+        s.soon,
+        s.general,
+        s.cardsAndTable,
+        s.boardAndStones,
+        s.boardColor,
+        s.stoneLook,
+        // The room: everyone enters as a spectator and joins the game.
+        s.joinGame,
+        s.leaveSeat,
+        s.spectators,
+        s.spectatorsSeeBots,
+        s.seatList,
+        s.game,
+        s.endGame,
+        s.nextGameBadge,
+        s.updateToWatch,
+        // The room docked beside every screen (rooms v2).
+        s.leaveRoom,
+        s.leaveRoomQuestion,
+        s.closeRoomQuestion,
+        s.leaveSeatQuestion,
+        s.leaveSeatWarning,
+        s.pickGame,
+        s.waitingForGame,
+        s.seatsAfterGame,
+        s.inRoom('K7M2Q'),
+        s.leaveSeatWarningRound,
+        s.needSeats(3),
+        s.people,
+        s.playingNow,
+        s.pickGameOnHome,
+        s.onlineSoon,
+        s.sit,
+        s.openTable,
+        s.endGameFirst,
+        s.roomSetupNote('K7M2Q'),
+        s.about,
+        s.versionNumber('2.0.12+'),
+        s.buildCommits(12, changed: true),
+        s.buildCommits(12, changed: false),
+        s.devBuild,
+        s.madeBy('Williams Zhang Cen'),
+        s.gamesList("Hold'em · Gomoku"),
+        s.onlineRooms(8),
+        s.runningOn('Windows'),
+        s.term(GlossaryTerm.roomStays),
+        s.definition(GlossaryTerm.roomStays),
+        for (final error in [...JoinError.values, null]) s.joinError(error),
       ];
       expect(texts.every((t) => t.isNotEmpty), isTrue);
     });
   }
 
+  test('a full room says so in every language, and nothing is left of looking at cards', () {
+    expect(
+      [for (final l in AppLanguage.values) S.forLanguage(l).joinError(JoinError.roomFull)],
+      ['Room full', 'Sala llena', '房间已满'],
+    );
+    expect(GlossaryTerm.values.map((t) => t.name), isNot(contains('seeCards')));
+    expect(
+      [
+        GlossaryTerm.roomGame,
+        GlossaryTerm.spectators,
+        GlossaryTerm.seeBots,
+        GlossaryTerm.roomStays,
+      ].map((t) => t.section),
+      everyElement(GlossarySection.online),
+    );
+  });
+
   testWidgets('the language button switches the whole app', (tester) async {
     final settings = AppSettings();
     await tester.pumpWidget(PokerFectionApp(settings: settings));
-    expect(find.text('Play'), findsOneWidget);
+    expect(find.text('Multiplayer'), findsOneWidget);
     await tester.tap(find.text('English'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Español').last);
     await tester.pumpAndSettle();
     expect(settings.language, AppLanguage.spanish);
-    expect(find.text('Jugar'), findsOneWidget);
+    expect(find.text('Multijugador'), findsOneWidget);
     expect(find.text('Ajustes'), findsOneWidget);
+    expect(find.text('Pronto'), findsNWidgets(games.where((g) => !g.ready).length));
     settings.update((s) => s.language = AppLanguage.chinese);
     await tester.pumpAndSettle();
-    expect(find.text('开始游戏'), findsOneWidget);
+    expect(find.text('斗地主'), findsOneWidget);
+    expect(find.text('二十一点'), findsOneWidget);
     // Material's own texts follow too (for example the back button's name).
-    expect(MaterialLocalizations.of(tester.element(find.text('开始游戏'))).backButtonTooltip, '返回');
+    expect(MaterialLocalizations.of(tester.element(find.text('斗地主'))).backButtonTooltip, '返回');
   });
 }
