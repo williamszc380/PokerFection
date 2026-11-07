@@ -267,9 +267,14 @@ class StringsEn extends S {
   @override
   String randomized(String action) => 'RNG: $action';
   @override
-  String solvingTable(int percent) => 'Solving… $percent%';
-  @override
   String get solvingDecision => 'Solving…';
+  @override
+  String lateGrade(DecisionGrade grade, Street street) => switch (street) {
+        Street.preflop => '${this.grade(grade)} preflop',
+        Street.flop => '${this.grade(grade)} on the flop',
+        Street.turn => '${this.grade(grade)} on the turn',
+        Street.river => '${this.grade(grade)} on the river',
+      };
   @override
   String thinking(String name) => '$name…';
   @override
@@ -281,7 +286,7 @@ class StringsEn extends S {
         NoAnswer.multiway => 'No GTO answer: multiway pot',
         NoAnswer.leftSolvedLines => 'No GTO answer: off the solved lines',
         NoAnswer.solveFailed => 'No GTO answer: the solver failed',
-        null => 'No GTO answer',
+        NoAnswer.notNeeded || null => 'No GTO answer',
       };
   @override
   String mistakeReason(MistakeKind kind, SpotActionKind gto, String amount) {
@@ -796,6 +801,7 @@ class StringsEn extends S {
         GlossaryTerm.mixMatch => 'Match',
         GlossaryTerm.score => 'Score',
         GlossaryTerm.grades => 'Grades',
+        GlossaryTerm.solving => 'Solving…',
         GlossaryTerm.noLimit => 'No-Limit',
         GlossaryTerm.minBet => 'Min-bet',
         GlossaryTerm.minRaise => 'Min-raise',
@@ -913,6 +919,8 @@ class StringsEn extends S {
             'hands.',
         GlossaryTerm.grades => 'By EV loss (raise sizes count 10%): Best (up to 0.02 BB), Good (0.08), Inaccuracy (0.25), '
             'Mistake (0.75), Blunder (more).',
+        GlossaryTerm.solving => "GTO's answer for this decision is still being worked out. Play on: your move "
+            "is graded when the answer is ready, and Show GTO shows it as soon as it comes.",
         GlossaryTerm.noLimit => 'The betting used here: you can bet or raise any amount, up to all your chips.',
         GlossaryTerm.minBet => 'The smallest bet allowed: one big blind.',
         GlossaryTerm.minRaise => 'The smallest raise allowed. Standard: at least the size of the last bet or '

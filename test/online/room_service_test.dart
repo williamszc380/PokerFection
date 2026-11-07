@@ -512,8 +512,9 @@ void main() {
     await _end(tester, server, [rooms]);
   });
 
-  testWidgets("the host spectating with a GTO bot, on Home the whole hand: the deal waits for the host's solve, the "
-      'bot plays from the host, and the table makes no sound off screen', (tester) async {
+  testWidgets("the host spectating with a GTO bot, on Home the whole hand: the deal doesn't wait for the host's "
+      "slow solve, the bot plays from the host's app within its think pause and budget all the same, and the table "
+      'makes no sound off screen', (tester) async {
     final server = TestServer();
     final sounds = <SoundEffect>[];
     OnlineTableController.debugOnSound = sounds.add;
@@ -543,13 +544,18 @@ void main() {
     await tester.pump();
     final players = await _players(tester, server, own.room!.code, ['Cy']);
     own.send(const StartGame());
-    // From the first hand's line-up to its deal.
+    // From the first hand's line-up to its deal, and to the bot's first turn and move.
     final cy = players.single;
     final link = server.links.first;
-    int? readyAt, dealtAt;
+    int? dealtAt, botTurnAt, botActAt;
     void note() {
-      readyAt ??= link.sent.any((m) => m.contains('"t":"ready"')) ? server.clock.nowMs : null;
       dealtAt ??= cy.seen.whereType<HandDealt>().isNotEmpty ? server.clock.nowMs : null;
+      final turns = [
+        for (final m in cy.seen)
+          if (m case HandDealt(:final turn?) || HandEvents(:final turn?)) turn,
+      ];
+      botTurnAt ??= turns.any((t) => t.seat == 0) ? server.clock.nowMs : null;
+      botActAt ??= link.sent.any((m) => m.contains('"t":"botAct"')) ? server.clock.nowMs : null;
     }
 
     await server.until(tester, () => cy.seen.whereType<NextHand>().isNotEmpty, 'the line-up');
@@ -567,14 +573,16 @@ void main() {
     sounds.clear();
     await server.until(tester, () {
       note();
-      return dealtAt != null;
-    }, 'the deal');
-    // The first hand has no wait of its own: it was dealt once the host's app had solved and said Ready.
-    expect(readyAt, isNotNull);
-    expect(readyAt! - announced, greaterThanOrEqualTo(1500), reason: 'the solve took its time');
-    expect(dealtAt!, greaterThanOrEqualTo(readyAt!), reason: "the deal waited for the host's Ready");
-    expect(dealtAt! - announced, lessThan(OnlineTiming.readyWaitWithHelp.inMilliseconds), reason: 'not for the longest wait');
-    await server.until(tester, () => link.sent.any((m) => m.contains('"t":"botAct"')), 'the bot plays from the host');
+      return botActAt != null;
+    }, 'the bot plays from the host');
+    // The first hand has no wait of its own, and the host watching isn't waited for: dealt at once.
+    expect(dealtAt! - announced, lessThan(1000), reason: "the deal didn't wait for the host's 2 s solve");
+    expect(link.sent.where((m) => m.contains('"t":"ready"')), isEmpty, reason: 'the host only watches');
+    // The bot thinks, waits a second more for its solve (2 s away), then plays all the same.
+    final took = botActAt! - botTurnAt!;
+    expect(took, greaterThanOrEqualTo((Playback.botThink + Playback.botBudget).inMilliseconds - 200));
+    expect(took, lessThanOrEqualTo((Playback.botThink + Playback.botBudget).inMilliseconds + 200));
+    expect(botActAt! - announced, lessThan(2000), reason: 'before the solve was done');
     await server.until(tester, () => players.single.seen.whereType<HandDealt>().length >= 2, 'another hand');
     expect(_atTable(), isFalse);
     expect(sounds, isEmpty, reason: 'no sound off screen');

@@ -287,7 +287,11 @@ void main() {
     final game = TestBigTwo(setup: setupOf(), jobs: Jobs.using(backend));
     await game.newGame();
     await settle();
-    expect(backend.running, isNotEmpty, reason: 'a bot or the coach is at work at once');
+    // A bot's job, or the coach's for the player (unless the deal ended at
+    // once on a dealt dragon, or the player's only move is the 3 alone).
+    if (!game.isOver && (game.seatToAct != 0 || hasChoice(game))) {
+      expect(backend.running, isNotEmpty, reason: 'a bot or the coach is at work at once');
+    }
     final before = [...backend.running];
     await game.newGame();
     await settle();

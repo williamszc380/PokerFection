@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 
 import '../engine/actions.dart';
 import '../engine/events.dart';
-import '../bots/preflop_ranking.dart';
 import '../game/pre_action.dart';
 import '../game/table_session.dart';
 import '../gto/hand_read.dart';
@@ -39,9 +38,12 @@ import 'widgets/turn_clock.dart';
 /// ticked one (or one drawn from their mix) and sees GTO's answer with a
 /// score.
 ///
-/// Online, the choices show at once and GTO's answer joins them when it is
-/// worked out; a move is sent as soon as it is chosen, and its score shows
-/// without holding the table. A player out of chips gets Rebuy or Leave
+/// The choices show at once and GTO's answer joins them when it is worked
+/// out ("Solving…" until then). Show GTO can be pressed meanwhile: it lights,
+/// and the answer shows the moment it comes; nothing is held, so a move made
+/// first plays at once and is graded when the answer comes, its score shown
+/// without holding the table (online, a move is sent as soon as it is
+/// chosen). A player out of chips gets Rebuy or Leave
 /// (with rebuys), else watches, with the room's Lobby and Leave; one who
 /// sits out watches, with I'm Back and Leave.
 ///
@@ -127,8 +129,8 @@ class DecisionPanelState extends State<DecisionPanel> {
   /// There is a GTO answer for this decision (GTO Training).
   bool get _training => _c.heroSpot != null;
 
-  /// Online: GTO's answer for this decision is still being worked out.
-  bool get _awaitingHelp => _online?.helpPending ?? false;
+  /// GTO's answer for this decision is still being worked out.
+  bool get _awaitingHelp => _c.answerPending;
 
   /// Advanced training: the user sets percentages and gets a score.
   bool get _percentages => (_training || _awaitingHelp) && _c.advanced;
@@ -137,6 +139,13 @@ class DecisionPanelState extends State<DecisionPanel> {
   /// (and in simple training GTO's percentages, which advanced training
   /// fills in).
   bool _gtoShown = false;
+
+  /// Show GTO was pressed before GTO's answer came: it shows when it comes
+  /// (nothing waits for it meanwhile).
+  bool _gtoWanted = false;
+
+  /// The user's choices [_menu] was set up for: a decision of its own.
+  LegalActions? _options;
 
   /// Advanced training: the user's own percentages while Show GTO is on,
   /// put back when it is turned off.
@@ -158,7 +167,7 @@ class DecisionPanelState extends State<DecisionPanel> {
       _draw != _startDraw ||
       _raiseTo != _startRaiseTo;
 
-  /// Whether [menu] is the decision showing (online, now with GTO's answer).
+  /// Whether [menu] is the decision showing (now with GTO's answer).
   bool _sameDecision(List<SpotAction> menu) {
     final old = _menu;
     if (old == null || old.length != menu.length) return false;
@@ -168,9 +177,8 @@ class DecisionPanelState extends State<DecisionPanel> {
     return true;
   }
 
-  /// Online: GTO's answer came for the decision showing, after the user
-  /// started on it. What they set stays; raise sizes GTO hasn't solved
-  /// drop out.
+  /// GTO's answer came for the decision showing, after the user started on
+  /// it. What they set stays; raise sizes GTO hasn't solved drop out.
   void _adopt(List<SpotAction> menu) {
     final oldSizes = _rows.sizes, oldShares = _sizes;
     _menu = menu;
@@ -267,7 +275,9 @@ class DecisionPanelState extends State<DecisionPanel> {
 
   /// Fills in GTO's answer as the mix (the user can still change it and
   /// then plays as usual; the decision isn't scored).
-  void _reveal() => setState(() {
+  void _reveal() => setState(_fillGto);
+
+  void _fillGto() {
     final gto = _c.heroSpot!.frequencies;
     final raises = [for (final i in _rows.sizes) gto[i]];
     _top = splitWhole([gto[_rows.fold], gto[_rows.passive], raises.fold(0.0, (a, b) => a + b)], 100);
@@ -275,22 +285,36 @@ class DecisionPanelState extends State<DecisionPanel> {
     _gtoTop = List.of(_top);
     _gtoSizes = List.of(_sizes);
     _gtoShown = true;
-  });
+  }
 
   /// Show GTO is a toggle. In simple training it puts GTO's percentages on
   /// the buttons (and its raise sizes over the slider); in advanced training
   /// it fills in GTO's mix, and turning it off puts the user's own back.
-  /// Online, everyone at the table is told when it is turned on.
+  /// Online, everyone at the table is told when it is turned on. Pressed
+  /// before the answer has come, it lights and the hand's solves come first
+  /// while the user waits (until the answer comes, it is turned off, or the
+  /// decision is over); the answer shows once it comes (pressed again, it
+  /// won't).
   void _toggleGto() {
+    if (_c.answerPending) {
+      setState(() => _gtoWanted = !_gtoWanted);
+      _c.wantAnswerShown(_gtoWanted);
+      return;
+    }
     if (!_percentages) {
       setState(() => _gtoShown = !_gtoShown);
-      if (_gtoShown) _online?.usedHelp();
+      if (_gtoShown) {
+        _online?.usedHelp();
+      } else {
+        _c.wantAnswerShown(false);
+      }
     } else if (_showingGto) {
       setState(() {
         _top = _ownTop ?? _top;
         _sizes = _ownSizes ?? _sizes;
         _gtoShown = false;
       });
+      _c.wantAnswerShown(false);
     } else {
       _ownTop = List.of(_top);
       _ownSizes = List.of(_sizes);
@@ -303,12 +327,20 @@ class DecisionPanelState extends State<DecisionPanel> {
   /// a raise of another amount, graded as [choice].
   void _quickPlay(int choice, {PlayerAction? action}) {
     if (_c.heroScore != null) return;
-    // Online, a move made before GTO's answer comes is graded once it does.
+    // A move made before GTO's answer comes is graded once it does.
     if (_training || _awaitingHelp) {
       _c.playGraded(choice, action: action);
     } else {
       _c.heroAct(action ?? _rows.menu[choice].action);
     }
+  }
+
+  /// The F and C keys while the buttons decide (simple training): F folds
+  /// (checks when that is free), C checks or calls, graded as the buttons
+  /// are. Nothing while percentages are to be set.
+  void playKey({required bool fold}) {
+    if (_menu == null || _c.heroOptions == null || _c.heroScore != null || _percentages) return;
+    _quickPlay(fold && _rows.canFold ? _rows.fold : _rows.passive);
   }
 
   /// The menu's choice for a raise to [to]: all-in, or the nearest size GTO
@@ -400,48 +432,58 @@ class DecisionPanelState extends State<DecisionPanel> {
     final c = _c;
     final online = _online;
     final menu = c.heroMenu;
+    final options = c.heroOptions;
     if (menu != null && !identical(menu, _menu)) {
-      // Online, GTO's answer can come after the choices: what the user set stays.
-      if (online != null && _sameDecision(menu) && _touched) {
+      // GTO's answer can come after the choices: what the user set stays.
+      final same = identical(options, _options) && _sameDecision(menu);
+      if (same && _touched) {
         _adopt(menu);
       } else {
+        final wanted = same && _gtoWanted;
         _reset(menu);
+        _gtoWanted = wanted;
+      }
+    }
+    if (!identical(options, _options)) {
+      // Another decision: Show GTO pressed at the last one is for that one.
+      _options = options;
+      _gtoWanted = false;
+    }
+    if (_gtoWanted && !c.answerPending) {
+      // The answer Show GTO waited for came (or there is none).
+      _gtoWanted = false;
+      if (_training && !_answerHidden) {
+        if (_percentages) {
+          _ownTop = List.of(_top);
+          _ownSizes = List.of(_sizes);
+          _fillGto();
+        } else {
+          _gtoShown = true;
+        }
+        if (online != null) WidgetsBinding.instance.addPostFrameCallback((_) => online.usedHelp());
       }
     }
 
+    // The table doesn't wait: the user's choices, or the score of their
+    // move (until it is put away), then the hand's end or whoever acts.
     final Widget body;
     if (online != null && online.ended) {
       body = _ended(context, online);
-    } else if (online != null) {
-      // Online the table doesn't wait: the user's choices first, then the
-      // score of their last move (until OK), then whoever acts.
-      if (menu != null && c.heroOptions != null && c.heroScore == null) {
-        body = _input(context);
-      } else if (c.heroScore != null && c.heroSpot != null) {
-        body = _result(context, c.heroSpot!, c.heroScore!, c.heroMix!);
-      } else if (c.handOver) {
-        body = _handOver(context);
-      } else if (c.preActionCall case final toCall?) {
-        body = _preActions(context, toCall);
-      } else {
-        body = _waiting(context);
-      }
-    } else if (c.preparing != null) {
-      body = _preparing(context, c.preparing!);
-    } else if (c.handOver) {
-      body = _handOver(context);
-    } else if (c.preActionCall case final toCall?) {
-      // Someone else acts (or their answer is being solved): the pre-actions.
-      body = _preActions(context, toCall);
-    } else if (c.solvingSpot) {
-      body = _solving(context);
     } else if (c.heroScore != null && c.heroSpot != null) {
       body = _result(context, c.heroSpot!, c.heroScore!, c.heroMix!);
+    } else if (_drill case final drill? when drill.gradePending) {
+      // A saved spot played before its answer came: graded when it does.
+      body = _gradeComing(context);
     } else if (_drill?.outcome case final outcome?) {
       // A saved spot without GTO's answer this time: not graded.
       body = _ungraded(context, outcome);
-    } else if (menu != null) {
+    } else if (menu != null && options != null) {
       body = _input(context);
+    } else if (c.handOver) {
+      body = _handOver(context);
+    } else if (c.preActionCall case final toCall?) {
+      // Someone else acts: the pre-actions.
+      body = _preActions(context, toCall);
     } else {
       body = _waiting(context);
     }
@@ -479,12 +521,11 @@ class DecisionPanelState extends State<DecisionPanel> {
     final options = _c.heroOptions;
     final training = _training;
     final menu = _rows.menu;
-    // In Guess the GTO mode, say why this decision isn't scored (online,
-    // once GTO's answer has been worked out).
+    // In Guess the GTO mode, say why this decision isn't scored (once
+    // GTO's answer has been worked out); never for an answer nobody needed.
     final awaiting = _awaitingHelp;
-    final noAnswer = _c.guessGto && !training && !awaiting
-        ? s.noAnswer(_c.session.preflop?.unavailable ?? _c.session.postflop?.unavailable)
-        : null;
+    final none = _c.answerNone ?? _c.session.preflop?.unavailable ?? _c.session.postflop?.unavailable;
+    final noAnswer = _c.guessGto && !training && !awaiting && none != NoAnswer.notNeeded ? s.noAnswer(none) : null;
     // With more than two players after the flop, GTO's answer is approximate.
     final hand = _c.session.hand;
     final approximate = training &&
@@ -498,7 +539,8 @@ class DecisionPanelState extends State<DecisionPanel> {
     final potOdds = options == null || !options.canCall || !(_training || _awaitingHelp)
         ? null
         : s.potOdds((options.toCall / (options.pot + options.toCall) * 100).round());
-    final notices = [
+    // [tight]: a short panel's, "Solving…" without the space under it.
+    List<Widget> noticesFor({bool tight = false}) => [
       if (noAnswer != null)
         Padding(
           padding: const EdgeInsets.only(bottom: 4),
@@ -506,8 +548,9 @@ class DecisionPanelState extends State<DecisionPanel> {
         ),
       if (approximate)
         Text(s.approxMultiway, style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFFFFCC80))),
-      // Online: GTO's answer is on its way (play on: the move is graded when it comes).
-      if (awaiting) _solvingLine(context),
+      // GTO's answer is on its way (play on: the move is graded when it
+      // comes). The buttons show it beside Show GTO instead.
+      if (awaiting && _percentages) _solvingLine(context, padded: !tight),
       if (potOdds != null)
         Visibility(
           visible: _gtoShown,
@@ -526,62 +569,109 @@ class DecisionPanelState extends State<DecisionPanel> {
         ),
     ];
     // Free Play and simple training: the buttons (GTO's answer goes on them).
-    if (!_percentages) return _quick(context, notices);
+    if (!_percentages) return _quick(context, noticesFor());
     final played = _played;
     final mix = _mix();
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        ...notices,
-        if (_percentages)
-          MixSlider(
-            colors: [for (final i in _rows.allowed) actionColor(menu, i)],
-            shares: [for (final i in _rows.allowed) mix[i] * 100],
-            // Fold's and check or call's handles above the bar, the raise sizes' below.
-            upper: _rows.allowed.indexOf(_rows.passive) + 1,
-            onChanged: _setShares,
-          ),
-        const SizedBox(height: 4),
-        Expanded(child: LayoutBuilder(builder: _choices)),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            if (_percentages) ...[
-              _SquareTick(
-                selected: _draw,
-                onTap: () => setState(() => _draw = true),
-              ),
-              const SizedBox(width: 6),
-              Text(s.randomize),
-              const SizedBox(width: 12),
-            ],
-            if (training || awaiting) ...[
-              _showGtoButton(s),
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: _PlayButton(
-                label: _draw ? s.playRandomized : spotActionLabel(s, menu[played]),
-                // Rainbow for a random draw; otherwise the ticked action's own color.
-                color: _draw ? null : actionColor(menu, played),
-                onPressed: submit,
+    final slider = MixSlider(
+      colors: [for (final i in _rows.allowed) actionColor(menu, i)],
+      shares: [for (final i in _rows.allowed) mix[i] * 100],
+      // Fold's and check or call's handles above the bar, the raise sizes' below.
+      upper: _rows.allowed.indexOf(_rows.passive) + 1,
+      onChanged: _setShares,
+    );
+    final rng = [
+      _SquareTick(
+        selected: _draw,
+        onTap: () => setState(() => _draw = true),
+      ),
+      const SizedBox(width: 6),
+      Text(s.randomize),
+      const SizedBox(width: 12),
+    ];
+    final showGto = [
+      if (training || awaiting) ...[
+        _showGtoButton(s),
+        const SizedBox(width: 8),
+      ],
+    ];
+    final play = _PlayButton(
+      label: _draw ? s.playRandomized : spotActionLabel(s, menu[played]),
+      // Rainbow for a random draw; otherwise the ticked action's own color.
+      color: _draw ? null : actionColor(menu, played),
+      onPressed: submit,
+    );
+    return LayoutBuilder(
+      builder: (context, box) {
+        if (box.maxHeight < _shortPanel) {
+          // A short panel (a phone sideways): the slider, RNG, Show GTO and
+          // Play always show, and the notices ("Solving…" first) and the
+          // rows scroll above them. Wide, the slider sits beside the
+          // buttons; narrow, above them if there is room, else it scrolls too.
+          final wide = box.maxWidth >= _oneRowWidth;
+          final sliderFixed = wide || box.maxHeight >= _sliderAbove;
+          final scrolling = Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ...noticesFor(tight: true),
+                  if (!sliderFixed) ...[slider, const SizedBox(height: 4)],
+                  LayoutBuilder(builder: (context, constraints) => _choices(context, constraints, scroll: false)),
+                ],
               ),
             ),
+          );
+          if (wide) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                scrolling,
+                Row(
+                  children: [
+                    Expanded(flex: 3, child: slider),
+                    const SizedBox(width: 12),
+                    ...rng,
+                    ...showGto,
+                    Expanded(flex: 2, child: play),
+                  ],
+                ),
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              scrolling,
+              if (sliderFixed) slider,
+              const SizedBox(height: 6),
+              Row(children: [...rng, ...showGto, Expanded(child: play)]),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ...noticesFor(),
+            slider,
+            const SizedBox(height: 4),
+            Expanded(child: LayoutBuilder(builder: _choices)),
+            const SizedBox(height: 6),
+            Row(children: [...rng, ...showGto, Expanded(child: play)]),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 
-  /// Show GTO, a toggle: highlighted while GTO's answer shows (greyed out
-  /// online until it comes, [waiting] for the user's turn, and at a saved
-  /// spot until it is played).
+  /// Show GTO, a toggle: highlighted while GTO's answer shows, or will
+  /// once it comes (greyed out [waiting] for the user's turn, when there is
+  /// no answer, and at a saved spot until it is played).
   Widget _showGtoButton(S s, {bool waiting = false}) {
-    final on = !waiting && (_percentages ? _showingGto : _gtoShown);
+    final on = !waiting && (_gtoWanted || (_percentages ? _showingGto : _gtoShown));
     return OutlinedButton.icon(
       key: waiting ? null : const ValueKey('show gto'),
-      onPressed: _training && !waiting && !_answerHidden ? _toggleGto : null,
+      onPressed: (_training || _awaitingHelp) && !waiting && !_answerHidden ? _toggleGto : null,
       icon: Icon(on ? Icons.visibility_off : Icons.visibility, size: 18),
       label: Text(s.showGto),
       style: OutlinedButton.styleFrom(
@@ -665,7 +755,9 @@ class DecisionPanelState extends State<DecisionPanel> {
         gto: canRaise ? gto : null,
         at: raise,
       ),
-      gto: _training || _awaitingHelp,
+      // In Guess the GTO mode always there, greyed out when there is no
+      // answer (nothing moves when it comes, or turns out not to).
+      gto: _c.guessGto,
     );
   }
 
@@ -678,7 +770,9 @@ class DecisionPanelState extends State<DecisionPanel> {
   /// The quick view's layout, the same at the user's turn and while
   /// someone else acts (the pre-actions take the buttons' places): [left]
   /// and [right] side by side, [wide] under them, then [below] (the raise
-  /// slider) and, with [gto], Show GTO, at the bottom of the panel.
+  /// slider) and, with [gto], Show GTO, at the bottom of the panel, with
+  /// "Solving…" beside it while GTO's answer is on its way (on a short panel,
+  /// above the buttons, where it is seen without scrolling).
   Widget _buttons({
     required List<Widget> notices,
     required Widget left,
@@ -688,50 +782,66 @@ class DecisionPanelState extends State<DecisionPanel> {
     required bool gto,
     bool waiting = false,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        ...notices,
-        Expanded(
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (widget.compact)
-                    Row(
-                      children: [
-                        Expanded(flex: 2, child: left),
-                        const SizedBox(width: 8),
-                        Expanded(flex: 2, child: right),
-                        const SizedBox(width: 8),
-                        Expanded(flex: 3, child: wide),
+    final solving = !waiting && _awaitingHelp;
+    return LayoutBuilder(
+      builder: (context, box) {
+        final short = box.maxHeight < _shortPanel;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ...notices,
+            if (solving && short) _solvingLine(context),
+            Expanded(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (widget.compact)
+                        Row(
+                          children: [
+                            Expanded(flex: 2, child: left),
+                            const SizedBox(width: 8),
+                            Expanded(flex: 2, child: right),
+                            const SizedBox(width: 8),
+                            Expanded(flex: 3, child: wide),
+                          ],
+                        )
+                      else ...[
+                        Row(
+                          children: [
+                            Expanded(child: left),
+                            const SizedBox(width: 8),
+                            Expanded(child: right),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        wide,
                       ],
-                    )
-                  else ...[
-                    Row(
-                      children: [
-                        Expanded(child: left),
-                        const SizedBox(width: 8),
-                        Expanded(child: right),
+                      below,
+                      if (gto) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            _showGtoButton(S.of(context), waiting: waiting),
+                            // GTO's answer is on its way (play on: the move is graded when it comes).
+                            if (solving && !short) ...[
+                              const SizedBox(width: 12),
+                              Flexible(child: _solvingLine(context, padded: false)),
+                            ],
+                          ],
+                        ),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    wide,
-                  ],
-                  below,
-                  if (gto) ...[
-                    const SizedBox(height: 10),
-                    Align(alignment: Alignment.centerLeft, child: _showGtoButton(S.of(context), waiting: waiting)),
-                  ],
-                ],
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 
@@ -1188,7 +1298,6 @@ class DecisionPanelState extends State<DecisionPanel> {
             textAlign: TextAlign.center,
             style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70),
           ),
-        if (c.solvingSpot) _solvingLine(context),
         if (c.view.turnEnds case final ends?) ...[
           const SizedBox(height: 6),
           TurnClock.bar(ends: ends, limit: c.view.turnLimit ?? Duration.zero, text: s.secondsLeft, style: muted),
@@ -1229,7 +1338,8 @@ class DecisionPanelState extends State<DecisionPanel> {
 
   /// The rows: fold, check or call and raise (any size), then below them
   /// each raise size, the same way before and after the flop.
-  Widget _choices(BuildContext context, BoxConstraints constraints) {
+  /// [scroll]: in a scroll view of its own (else it is inside one already).
+  Widget _choices(BuildContext context, BoxConstraints constraints, {bool scroll = true}) {
     final s = S.of(context);
     final menu = _rows.menu;
     final played = _played;
@@ -1254,7 +1364,10 @@ class DecisionPanelState extends State<DecisionPanel> {
           for (final i in _rows.aggressive) _sizeLabel(s, menu[i]),
         ]) +
         18;
-    final name = min(nameWidth, constraints.maxWidth / 2);
+    // On a narrow panel (online, a phone sideways) the names give way first,
+    // so the tick, a little slider, the percentage and the EV loss fit.
+    final fixed = _tickWidth + 6 + (_percentages ? _percentWidth : 0) + (spot != null ? _evWidth : 0);
+    final name = min(nameWidth, max(0.0, min(constraints.maxWidth / 2, (constraints.maxWidth - fixed) * 0.6)));
 
     final first = <Widget>[
       _row(
@@ -1316,8 +1429,7 @@ class DecisionPanelState extends State<DecisionPanel> {
     ];
 
     final muted = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60);
-    return SingleChildScrollView(
-      child: Column(
+    final rows = Column(
         children: [
           // After Show GTO: what the extra columns are.
           if (spot != null)
@@ -1333,11 +1445,14 @@ class DecisionPanelState extends State<DecisionPanel> {
           const Divider(height: 10),
           ...sizes,
         ],
-      ),
-    );
+      );
+    return scroll ? SingleChildScrollView(child: rows) : rows;
   }
 
   static const _evWidth = 64.0;
+
+  /// A row's tick box: its 22 px icon and 4 px around it.
+  static const _tickWidth = 30.0;
 
   /// How wide the widest of [labels] is in the rows' text style.
   static double _textWidth(BuildContext context, List<String> labels) {
@@ -1458,32 +1573,14 @@ class DecisionPanelState extends State<DecisionPanel> {
   // The GTO answer
   // ---------------------------------------------------------------------------
 
-  /// Why a mistake was one (see [reasonFor]), worked out once per decision:
-  /// against the opponent whose range beats the user's hand most often
-  /// after the flop, from the starting hand before it.
-  Reason? _why(DecisionScore score, MistakeKind kind) {
-    if (identical(_whyScore, score)) return _whyReason;
-    _whyScore = score;
-    final session = _c.session, hand = session.hand;
-    if (hand == null) return _whyReason = null;
-    final hole = hand.holeCards(TableSession.heroSeat);
-    final options = _c.heroOptions;
-    final odds = options != null && options.canCall ? options.toCall / (options.pot + options.toCall) : null;
-    if (hand.street == Street.preflop) {
-      return _whyReason = reasonFor(kind, percentile: preflopPercentile(hole[0], hole[1]), odds: odds);
-    }
-    HandRead? read;
-    for (var seat = 0; seat < hand.playerCount; seat++) {
-      if (seat == TableSession.heroSeat || hand.isFolded(seat)) continue;
-      final range = session.postflop?.currentRange(hand, seat);
-      final r = range == null ? null : readHand(hole, hand.board, range);
-      if (r != null && (read == null || r.beaten > read.beaten)) read = r;
-    }
-    return _whyReason = read == null ? null : reasonFor(kind, read: read, odds: odds);
+  /// Why a mistake was one (see [reasonFor]): against the opponent whose
+  /// range beats the user's hand most often after the flop, from the
+  /// starting hand before it, as they stood at the decision graded (see
+  /// whyInputs: the hand may have moved on since, when it was graded late).
+  Reason? _why(MistakeKind kind) {
+    final w = _c.heroWhy;
+    return w == null ? null : reasonFor(kind, percentile: w.percentile, read: w.read, odds: w.odds);
   }
-
-  DecisionScore? _whyScore;
-  Reason? _whyReason;
 
   Widget _result(BuildContext context, SpotStrategy spot, DecisionScore score, List<double> mix) {
     final theme = Theme.of(context);
@@ -1491,15 +1588,57 @@ class DecisionPanelState extends State<DecisionPanel> {
     final muted = theme.textTheme.bodySmall?.copyWith(color: Colors.white60);
     final played = _c.heroPlay;
     final outcome = _drill?.outcome;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
+    final details = [
+      // A saved spot played again: when it is back.
+      if (outcome != null) _queuedLine(context, outcome),
+      // A mistake or a blunder: why, in a few words.
+      if (score.grade.index >= DecisionGrade.mistake.index)
+        if (mistakeOf(spot, mix) case (final kind, final gto)?)
+          Text(
+            [
+              s.mistakeReason(kind, spot.actions[gto].kind, formatBb(spot.actions[gto].amount, unit: true)),
+              if (_why(kind) case final why?) s.mistakeWhy(why, spot.handName),
+            ].join(' '),
+            style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFFFFCC80)),
+          ),
+      if (played != null)
+        Text(
+          _c.heroDrew
+              ? s.randomized(spotActionLabel(s, spot.actions[played]))
+              : s.youPlay(switch (_c.heroAction) {
+                  final PlayerAction a => s.raiseTo(formatBb(a.amount, unit: true), null),
+                  null => spotActionLabel(s, spot.actions[played]),
+                }),
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+        ),
+      Text(
+        _c.advanced
+            ? s.evLossAndMatch('${score.evLoss.toStringAsFixed(2)} BB', (score.mixMatch * 100).round())
+            : '${s.evLoss} ${score.evLoss.toStringAsFixed(2)} BB',
+        style: muted,
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, box) {
+        // A short panel (a phone sideways): the button goes beside the
+        // grade, and the rest scrolls under them.
+        final short = box.maxHeight < _shortPanel;
+        // A saved spot stops at its decision: the next hand. A move played
+        // already (online, or graded after it): OK just puts the score away.
+        final button = FilledButton.icon(
+          key: const ValueKey('continue'),
+          onPressed: _c.continueHand,
+          icon: Icon(outcome != null ? Icons.skip_next : (_c.heroOptions == null ? Icons.check : Icons.play_arrow)),
+          label: Text(outcome != null ? s.nextHand : (_c.heroOptions == null ? s.ok : s.continueHand)),
+          style: FilledButton.styleFrom(minimumSize: short ? const Size(0, 40) : const Size.fromHeight(44)),
+        );
+        final header = Row(
           children: [
             GradeChip(grade: score.grade),
             const SizedBox(width: 10),
             // Simple training scores the one action played.
-            Flexible(
+            Expanded(
               child: Text(
                 s.score(_c.advanced ? score.score : score.playScore),
                 overflow: TextOverflow.ellipsis,
@@ -1507,56 +1646,50 @@ class DecisionPanelState extends State<DecisionPanel> {
               ),
             ),
             const HelpButton(section: GlossarySection.scoring),
+            if (short) ...[const SizedBox(width: 8), button],
           ],
-        ),
-        // A saved spot played again: when it is back.
-        if (outcome != null) _queuedLine(context, outcome),
-        // A mistake or a blunder: why, in a few words.
-        if (score.grade.index >= DecisionGrade.mistake.index)
-          if (mistakeOf(spot, mix) case (final kind, final gto)?)
-            Text(
-              [
-                s.mistakeReason(kind, spot.actions[gto].kind, formatBb(spot.actions[gto].amount, unit: true)),
-                if (_why(score, kind) case final why?) s.mistakeWhy(why, spot.handName),
-              ].join(' '),
-              style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFFFFCC80)),
-            ),
-        if (played != null)
-          Text(
-            _c.heroDrew
-                ? s.randomized(spotActionLabel(s, spot.actions[played]))
-                : s.youPlay(switch (_c.heroAction) {
-                    final PlayerAction a => s.raiseTo(formatBb(a.amount, unit: true), null),
-                    null => spotActionLabel(s, spot.actions[played]),
-                  }),
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-        Text(
-          _c.advanced
-              ? s.evLossAndMatch('${score.evLoss.toStringAsFixed(2)} BB', (score.mixMatch * 100).round())
-              : '${s.evLoss} ${score.evLoss.toStringAsFixed(2)} BB',
-          style: muted,
-        ),
-        const SizedBox(height: 6),
-        Expanded(
-          child: SingleChildScrollView(
-            child: StrategyComparison(spot: spot, mix: mix, played: played),
-          ),
-        ),
-        const SizedBox(height: 6),
-        // Online the move is played already: OK just puts the score away.
-        // A saved spot stops at its decision: the next hand.
-        FilledButton.icon(
-          key: const ValueKey('continue'),
-          onPressed: _c.continueHand,
-          icon: Icon(_online != null ? Icons.check : (outcome != null ? Icons.skip_next : Icons.play_arrow)),
-          label: Text(_online != null ? s.ok : (outcome != null ? s.nextHand : s.continueHand)),
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(44)),
-        ),
-      ],
+        );
+        final comparison = StrategyComparison(spot: spot, mix: mix, played: played);
+        if (short) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              header,
+              const SizedBox(height: 4),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [...details, const SizedBox(height: 6), comparison],
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            header,
+            ...details,
+            const SizedBox(height: 6),
+            Expanded(child: SingleChildScrollView(child: comparison)),
+            const SizedBox(height: 6),
+            button,
+          ],
+        );
+      },
     );
   }
+
+  /// Below this height the panel's body is short (a phone sideways): the
+  /// result and the hand's end put their button on their first line, and
+  /// scroll the rest.
+  static const _shortPanel = 200.0;
+
+  /// Advanced training on a short panel: wide enough for the mix slider
+  /// beside RNG, Show GTO and Play, else tall enough for it above them.
+  static const _oneRowWidth = 480.0, _sliderAbove = 130.0;
 
   // ---------------------------------------------------------------------------
   // Drills
@@ -1609,7 +1742,7 @@ class DecisionPanelState extends State<DecisionPanel> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          s.noAnswer(_c.session.preflop?.unavailable ?? _c.session.postflop?.unavailable),
+          s.noAnswer(_c.answerNone ?? _c.session.preflop?.unavailable ?? _c.session.postflop?.unavailable),
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
         ),
@@ -1629,16 +1762,6 @@ class DecisionPanelState extends State<DecisionPanel> {
   // ---------------------------------------------------------------------------
   // Between decisions
   // ---------------------------------------------------------------------------
-
-  Widget _preparing(BuildContext context, double progress) => _message(
-    context,
-    S.of(context).solvingTable((progress * 100).round()),
-    LinearProgressIndicator(value: progress),
-  );
-
-  Widget _solving(BuildContext context) {
-    return _message(context, S.of(context).solvingDecision, const LinearProgressIndicator());
-  }
 
   Widget _waiting(BuildContext context) {
     final seat = _c.view.actingSeat;
@@ -1660,10 +1783,15 @@ class DecisionPanelState extends State<DecisionPanel> {
     );
   }
 
-  /// Online: "Solving…" while GTO's answer for the decision is worked out.
-  Widget _solvingLine(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 4),
+  /// "Solving…" while GTO's answer for a decision is worked out (the
+  /// user's, or at the end of a hand, its grades still to come), with a "?".
+  Widget _solvingLine(BuildContext context, {MainAxisAlignment align = MainAxisAlignment.start, bool padded = true}) =>
+      Padding(
+    key: const ValueKey('solving'),
+    padding: EdgeInsets.only(bottom: padded ? 4 : 0),
     child: Row(
+      mainAxisAlignment: align,
+      mainAxisSize: padded ? MainAxisSize.max : MainAxisSize.min,
       children: [
         const SizedBox.square(dimension: 12, child: CircularProgressIndicator(strokeWidth: 1.5)),
         const SizedBox(width: 8),
@@ -1673,9 +1801,32 @@ class DecisionPanelState extends State<DecisionPanel> {
             style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white60),
           ),
         ),
+        const HelpButton(section: GlossarySection.scoring, terms: [GlossaryTerm.solving]),
       ],
     ),
   );
+
+  /// A saved spot played before its answer came: its grade is on its way,
+  /// and Next Hand deals the next one meanwhile (the spot is reviewed when
+  /// the grade lands).
+  Widget _gradeComing(BuildContext context) {
+    final s = S.of(context);
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _solvingLine(context, align: MainAxisAlignment.center),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          key: const ValueKey('continue'),
+          onPressed: _c.continueHand,
+          icon: const Icon(Icons.skip_next),
+          label: Text(s.nextHand),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+        ),
+      ],
+    );
+  }
 
   /// Online: what the user should know right now (above everything else):
   /// first that the connection dropped and is being got back (the choices
@@ -1836,12 +1987,18 @@ class DecisionPanelState extends State<DecisionPanel> {
     );
   }
 
+  /// The hand is over: what it gave up against GTO (training; else the
+  /// chips won or lost), "Solving…" while grades are still to come, each
+  /// Mistake or Blunder graded after its move (a tap shows the hand), and
+  /// the next hand (online, when it comes).
   Widget _handOver(BuildContext context) {
     final s = S.of(context);
     final String text;
     final Color color;
-    final record = _c.session.history.lastOrNull;
     final online = _online;
+    final number = online?.handNumber ?? _c.session.handNumber;
+    final record = _c.session.history.lastOrNull;
+    final late = _c.lateMistakes;
     if (_c.guessGto && record != null && record.decisions.isNotEmpty) {
       // Training: what the hand's decisions gave up against optimal play
       // (the chips won or lost are mostly luck).
@@ -1852,69 +2009,122 @@ class DecisionPanelState extends State<DecisionPanel> {
       text = result == 0 ? s.evenHand : formatSignedBb(result);
       color = result > 0 ? const Color(0xFF81C784) : (result < 0 ? const Color(0xFFE57373) : Colors.white70);
     }
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Online, before the first hand there is no result yet.
-        if (online == null || _c.view.heroResult != null) ...[
-          Text(
+    // Online, before the first hand there is no result yet.
+    final result = online == null || _c.view.heroResult != null
+        ? Text(
             text,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(color: color, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 12),
-        ],
-        // Online, after a hand: the user may show their cards to everyone.
-        if (online != null && online.canShowCards) ...[
-          OutlinedButton.icon(
-            key: const ValueKey('show my cards'),
-            onPressed: online.showCards,
-            icon: const Icon(Icons.visibility),
-            label: Text(s.showMyCards),
-            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
-          ),
-          const SizedBox(height: 12),
-        ],
-        // Online, the server deals the next hand by itself (once 2 seats are taken), until the game is over.
-        if (online == null)
-          FilledButton.icon(
-            onPressed: _c.startNextHand,
-            icon: const Icon(Icons.skip_next),
-            label: Text(S.of(context).nextHand),
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           )
-        else if (online.gameOver case final over?)
-          Text(
-            s.gameOver(over.name, you: over.seat != null && over.seat == online.client.mySeat),
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: const Color(0xFFFFE082),
-                  fontWeight: FontWeight.w700,
-                ),
-          )
-        else if (online.paused)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+        : null;
+    // Grades still to come, and those that came after their moves.
+    final pending = _c.gradesPending;
+    final lateLines = [
+      for (final (i, m) in late.indexed)
+        _LateGradeLine(
+          key: ValueKey('late $i'),
+          text: s.lateGrade(m.grade, m.street),
+          grade: m.grade,
+          onTap: () {
+            final hand = record != null && record.handNumber == number ? record : null;
+            if (hand == null) return;
+            showDialog<void>(context: context, builder: (_) => HandDetailsDialog(hand: hand));
+          },
+        ),
+    ];
+    final grades = [if (pending) _solvingLine(context, align: MainAxisAlignment.center), ...lateLines];
+    Widget nextHand({required bool short}) => FilledButton.icon(
+          onPressed: _c.startNextHand,
+          icon: const Icon(Icons.skip_next),
+          label: Text(s.nextHand),
+          style: FilledButton.styleFrom(minimumSize: short ? const Size(0, 40) : const Size.fromHeight(48)),
+        );
+    final onlineEnd = [
+      // Online, after a hand: the user may show their cards to everyone.
+      if (online != null && online.canShowCards) ...[
+        OutlinedButton.icon(
+          key: const ValueKey('show my cards'),
+          onPressed: online.showCards,
+          icon: const Icon(Icons.visibility),
+          label: Text(s.showMyCards),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+        ),
+        const SizedBox(height: 12),
+      ],
+      // Online, the server deals the next hand by itself (once 2 seats are taken), until the game is over.
+      if (online?.gameOver case final over?)
+        Text(
+          s.gameOver(over.name, you: over.seat != null && over.seat == online!.client.mySeat),
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: const Color(0xFFFFE082),
+                fontWeight: FontWeight.w700,
+              ),
+        )
+      else if (online != null && online.paused)
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Flexible(
+              child: Text(
+                s.waitingForPlayers,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white70),
+              ),
+            ),
+            const HelpButton(section: GlossarySection.online, terms: [GlossaryTerm.onlineBots]),
+          ],
+        )
+      else if (online?.nextHandAt case final next?)
+        _Countdown(
+          until: next,
+          text: s.nextHandIn,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white70),
+        ),
+    ];
+    return LayoutBuilder(
+      builder: (context, box) {
+        if (box.maxHeight < _shortPanel) {
+          // A short panel (a phone sideways): the result, "Solving…" and
+          // Next Hand on the first line, so the late Mistakes come first in
+          // what scrolls under them.
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Flexible(
-                child: Text(
-                  s.waitingForPlayers,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white70),
+              Row(
+                children: [
+                  Expanded(child: result ?? const SizedBox.shrink()),
+                  if (pending) ...[const SizedBox(width: 8), Flexible(child: _solvingLine(context, padded: false))],
+                  if (online == null) ...[const SizedBox(width: 8), nextHand(short: true)],
+                ],
+              ),
+              const SizedBox(height: 4),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [...lateLines, ...onlineEnd]),
                 ),
               ),
-              const HelpButton(section: GlossarySection.online, terms: [GlossaryTerm.onlineBots]),
             ],
-          )
-        else if (online.nextHandAt case final next?)
-          _Countdown(
-            until: next,
-            text: s.nextHandIn,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white70),
+          );
+        }
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: box.maxHeight),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (result != null) ...[result, const SizedBox(height: 12)],
+                ...grades,
+                if (grades.isNotEmpty) const SizedBox(height: 8),
+                ...onlineEnd,
+                if (online == null) nextHand(short: false),
+              ],
+            ),
           ),
-      ],
+        );
+      },
     );
   }
 
@@ -1930,6 +2140,65 @@ class DecisionPanelState extends State<DecisionPanel> {
       if (progress != null) ...[const SizedBox(height: 10), progress],
     ],
   );
+}
+
+/// One Mistake or Blunder graded after its move, on the hand-over panel:
+/// "Mistake on the flop", in its grade's color. A tap (a hand cursor and a
+/// highlight under the mouse) shows the hand's decisions.
+class _LateGradeLine extends StatefulWidget {
+  const _LateGradeLine({super.key, required this.text, required this.grade, required this.onTap});
+
+  final String text;
+  final DecisionGrade grade;
+  final VoidCallback onTap;
+
+  @override
+  State<_LateGradeLine> createState() => _LateGradeLineState();
+}
+
+class _LateGradeLineState extends State<_LateGradeLine> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = gradeColor(widget.grade);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: _hovered ? Colors.white12 : null,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.circle, size: 8, color: color),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  widget.text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: color,
+                        decoration: _hovered ? TextDecoration.underline : null,
+                        decorationColor: color,
+                      ),
+                ),
+              ),
+              Icon(Icons.chevron_right, size: 16, color: color),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Seconds left until [until], counting down by itself (so nothing else

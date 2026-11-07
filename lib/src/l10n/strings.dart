@@ -71,6 +71,7 @@ enum GlossaryTerm {
   mixMatch(GlossarySection.scoring),
   score(GlossarySection.scoring),
   grades(GlossarySection.scoring),
+  solving(GlossarySection.scoring),
   noLimit(GlossarySection.rules),
   minBet(GlossarySection.rules),
   minRaise(GlossarySection.rules),
@@ -296,8 +297,13 @@ abstract class S {
   String evLossAndMatch(String evLoss, int match);
   String youPlay(String action);
   String randomized(String action);
-  String solvingTable(int percent);
+  /// While GTO's answer for a decision is worked out (see
+  /// GlossaryTerm.solving): the user plays on meanwhile.
   String get solvingDecision;
+
+  /// A Mistake or Blunder graded after its move, listed when the hand is
+  /// over: "Mistake on the flop".
+  String lateGrade(DecisionGrade grade, Street street);
   String thinking(String name);
   String get nextHand;
   String get evenHand;

@@ -108,7 +108,7 @@ class _GomokuScreenState extends State<GomokuScreen> {
 
   bool get _playerToMove {
     final c = _controller;
-    final seat = c.started && !c.preparing && !c.isOver ? c.seatToAct : null;
+    final seat = c.started && !c.isOver ? c.seatToAct : null;
     return seat != null && c.isHuman(seat);
   }
 

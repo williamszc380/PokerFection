@@ -53,7 +53,17 @@ this card" on hover, or a long press); the coaches and bots treat it as known.
 - **The coach** is off until you turn it on: it lists the best moves and what
   each is worth. One click on a row picks that move, a double click plays
   it, and Pass is always listed. Play never waits for it: its answers and
-  the grades come in when they are ready.
+  the grades come in when they are ready. Blackjack deals at once on a new
+  shoe, while its strategy chart is still being made; the coach's first
+  answer comes once it is.
+- **Hold'em never waits for the solver:** the cards are dealt and your
+  choices work at once. **Show GTO** works while GTO's answer is still on
+  its way: the answer shows when it is ready (**Solving…** meanwhile), and
+  the buttons keep working. A move made before its answer is graded when
+  it comes, and late Mistakes and Blunders are listed when the hand is
+  over. GTO bots play within a second of their pause; past that they play
+  a simpler move that stays on the solved lines, so every decision can
+  still be graded.
 - **Big Two and Fight the Landlord:** the hand is fanned (drag to reorder,
   or sort by Rank or Suit), played cards pile up in the middle (tap the pile
   for the history), and a match is played to a target score (**Play to**, optionally scaled
@@ -113,10 +123,11 @@ as a spot: the whole hand up to that decision (table, stacks, every player's
 cards, the board and the betting). **Drills** on Hold'em's menu shows how many
 are due and deals them again, the most overdue first (Blunders first when
 equal): the same hand is replayed to the decision, GTO's answer is solved
-again, and the play is graded like Simple training (Show GTO waits until it
-is played). Spaced repetition, in real time: a new mistake is first due after
-10 min; played right (Good or better) it comes back after 1 h, 1 day, 3 days,
-1 week, then about 2.5 times longer each time; played wrong (or the same
+again, and the play is graded like Simple training (Show GTO is greyed out
+until it is played; played before GTO's answer is ready, it is graded when
+the answer comes, and Next Hand works meanwhile). Spaced repetition, in
+real time: a new mistake is first due after 10 min; played right (Good or
+better) it comes back after 1 h, 1 day, 3 days, 1 week, then about 2.5 times longer each time; played wrong (or the same
 mistake again in training), after 10 min. Up to 256 spots are kept (when full,
 the best learned go first), in `drills.json` next to the settings (local
 storage in the browser). With nothing due, Drills deals random hands at random
@@ -148,6 +159,10 @@ Rooms are for watching as much as playing:
 - **The coach** is there for spectators, off until they turn it on, worked
   out on their own device (the host never sends solves); "—" for a hand
   hidden from them.
+- **Nobody waits for a solve** (Hold'em): the next hand is dealt once every
+  player's app has shown the last one (3 s more at most). Help, Show GTO
+  and the host's GTO bots work as when playing alone, each from what its
+  own device has solved by then.
 - **Away:** when a player's time runs out or they are away, the room plays
   a simple move for them (in Hold'em, check or fold), and the game goes on.
 

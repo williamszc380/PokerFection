@@ -28,6 +28,7 @@ class PreflopTracker {
     required this.blueprint,
     required this.solveSubgame,
     required this.heroSeat,
+    this.handNumber,
   });
 
   /// The whole game, solved with the bots' menu for everyone.
@@ -37,51 +38,83 @@ class PreflopTracker {
   /// The user's seat.
   final int heroSeat;
 
+  /// The hand this tracker follows ([PokerHand.handNumber]), when known.
+  /// Its answers belong to that hand only: another hand at the same point
+  /// of the betting may hold other cards and stacks.
+  final int? handNumber;
+
   /// The user's subgames in this hand, by how many preflop actions came
   /// before them.
   final Map<int, PreflopAdvisor> _subgames = {};
   final Map<int, Future<PreflopAdvisor>> _pending = {};
 
-  /// Why there's no answer (the solve failed), if there isn't one.
+  /// Subgames let go by [dropSubgames]: a walk that would enter one can't
+  /// be followed any more.
+  final Set<int> _dropped = {};
+
+  /// Why there's no answer (the solve failed), if there isn't one. Once set,
+  /// no more subgames are solved in this hand: each starts from the ranges
+  /// the earlier ones give, and without one of those its answer would be
+  /// wrong rather than missing.
   NoAnswer? unavailable;
 
   /// Starts solving the user's subgame if it's their turn before the flop
-  /// (at most once per decision). Completes when it is solved.
+  /// (at most once per decision). Completes when it is solved, or at once
+  /// when the hand has no more answers ([unavailable]).
   Future<void> prepare(PokerHand hand) async {
+    if (unavailable != null) return;
     if (hand.isOver || hand.street != Street.preflop || hand.toAct != heroSeat) return;
-    final history = _history(hand);
+    final history = historyOf(hand);
     final k = history.length;
     if (_subgames.containsKey(k)) return;
     final pending = _pending[k] ??= _solve(hand, history);
     try {
-      _subgames[k] = await pending;
+      final subgame = await pending;
+      if (!_dropped.contains(k)) _subgames[k] = subgame;
     } on _OffTheSolvedLines {
       // Someone made a move the solved game doesn't have (online, a person can).
-      unavailable = NoAnswer.leftSolvedLines;
+      unavailable ??= NoAnswer.leftSolvedLines;
     } on Object {
-      unavailable = NoAnswer.solveFailed;
+      unavailable ??= NoAnswer.solveFailed;
     } finally {
       _pending.remove(k);
     }
   }
 
+  /// Lets go of the solved subgames (and those being solved) except the
+  /// ones in [keep], each known by how many preflop actions came before it
+  /// (see [historyOf]): they take memory, up to ~100 MB each at 8 players.
+  /// The answers kept stay right. Anything that would need a dropped
+  /// subgame gets no answer, never one worked out without it: once one is
+  /// dropped, no more subgames or streets are solved in this hand
+  /// ([unavailable] becomes [NoAnswer.notNeeded], which nobody is shown),
+  /// and ranges and moves past it read as off the solved lines. So with an
+  /// answer after the flop still to come, keep every subgame: its ranges
+  /// start from all of them.
+  void dropSubgames({Set<int> keep = const {}}) {
+    for (final k in [..._subgames.keys, ..._pending.keys]) {
+      if (keep.contains(k)) continue;
+      _subgames.remove(k);
+      _dropped.add(k);
+    }
+    if (_dropped.isNotEmpty) unavailable ??= NoAnswer.notNeeded;
+  }
+
+  /// Whether following [hand] would enter a subgame let go of.
+  bool _trimmedAt(PokerHand hand) {
+    if (_dropped.isEmpty) return false;
+    final k = historyOf(hand).length;
+    return _dropped.any((d) => d <= k);
+  }
+
   /// Whether the user's current decision is still being solved.
   bool isSolving(PokerHand hand) {
     if (hand.street != Street.preflop || hand.toAct != heroSeat || unavailable != null) return false;
-    return !_subgames.containsKey(_history(hand).length);
+    return !_subgames.containsKey(historyOf(hand).length);
   }
 
   Future<PreflopAdvisor> _solve(PokerHand hand, List<PreflopAction> history) async {
-    final spec = PreflopAdvisor.specFor(
-      stacksBySeat: [for (var s = 0; s < hand.playerCount; s++) hand.startingStackOf(s)],
-      buttonSeat: hand.buttonSeat,
-      smallBlind: hand.smallBlind,
-      bigBlind: hand.bigBlind,
-      ante: hand.ante,
-      raiseRule: hand.raiseRule,
-      heroSeat: heroSeat,
-      history: history,
-    );
+    final spec = specAt(hand, heroSeat: heroSeat, history: history);
     // Folds (or nothing) so far: every player still in has their full
     // range, and the solve can be shared (and done ahead of time).
     final onlyFolds = history.every((a) => a.move == PreflopMove.fold);
@@ -100,10 +133,29 @@ class PreflopTracker {
     return PreflopAdvisor(await solveSubgame(spec, ranges));
   }
 
-  static List<PreflopAction> _history(PokerHand hand) => [
+  /// Every preflop action of [hand] so far, in the solver's terms. Its
+  /// length is how a decision's subgame is known (see [dropSubgames]).
+  static List<PreflopAction> historyOf(PokerHand hand) => [
         for (final e in hand.log)
           if (e is ActionTaken && e.street == Street.preflop) PreflopAdvisor.treeAction(e),
       ];
+
+  /// [hand]'s preflop game from where it is now: its stacks and blinds,
+  /// with [history] (by default every preflop action so far, see
+  /// [historyOf]) already played. With [heroSeat], it is the user's
+  /// subgame there; without, just the betting so far, which is all
+  /// [PreflopTree.botMenuAt] needs.
+  static PreflopSpec specAt(PokerHand hand, {int? heroSeat, List<PreflopAction>? history}) =>
+      PreflopAdvisor.specFor(
+        stacksBySeat: [for (var s = 0; s < hand.playerCount; s++) hand.startingStackOf(s)],
+        buttonSeat: hand.buttonSeat,
+        smallBlind: hand.smallBlind,
+        bigBlind: hand.bigBlind,
+        ante: hand.ante,
+        raiseRule: hand.raiseRule,
+        heroSeat: heroSeat,
+        history: history ?? historyOf(hand),
+      );
 
   /// Where the hand is in the solved games: every preflop action so far
   /// (with the game and decision it was taken at), then the game and node
@@ -112,6 +164,7 @@ class PreflopTracker {
   /// A subgame ends when the user folds; the others play on in the
   /// blueprint, as long as the hand still fits it.
   _Walk? _walk(PokerHand hand) {
+    if (_trimmedAt(hand)) return null;
     final walk = _walkThrough(hand, useSubgames: true);
     if (walk != null && (walk.node is PreflopDecision || hand.street != Street.preflop || hand.isOver)) return walk;
     return _walkThrough(hand, useSubgames: false) ?? walk;
@@ -145,7 +198,7 @@ class PreflopTracker {
   /// The GTO answer for the user's decision, once its subgame is solved.
   SpotStrategy? spotFor(PokerHand hand) {
     if (hand.street != Street.preflop || hand.toAct != heroSeat) return null;
-    final subgame = _subgames[_history(hand).length];
+    final subgame = _subgames[historyOf(hand).length];
     if (subgame == null) return null;
     final root = subgame.tree.root;
     return root is PreflopDecision ? subgame.spotAt(root, hand) : null;
@@ -186,6 +239,50 @@ class PreflopTracker {
 /// subgame to solve.
 class _OffTheSolvedLines implements Exception {
   const _OffTheSolvedLines();
+}
+
+/// [move] (a bot's own idea, or one drawn from an older solve than the
+/// hand's latest) as a move of [menu], the bots' menu where it acts (see
+/// [PreflopTree.botMenuAt]). The hand then stays on the lines that every
+/// solve of it has, so later decisions in it can still be answered:
+///  - a raise goes to the nearest raise size on the menu, at its exact
+///    amount, or all-in when the menu has no raise (and an all-in stays
+///    all-in when it can): the same reading the solved game gives a size
+///    it doesn't have (see PreflopAdvisor.matchAction). With neither on
+///    the menu, it becomes a call if there is one, else a check or fold;
+///  - a call the menu lacks (a limp, one cold call too many) becomes a fold;
+///  - a fold with nothing to call is a check.
+/// Checks, and folds facing a bet, are always on the menu. A move on the
+/// menu stays as it is, and an empty menu changes nothing.
+PlayerAction fitToMenu(PlayerAction move, List<PreflopAction> menu, LegalActions legal) {
+  if (menu.isEmpty) return move;
+  bool has(PreflopMove m) => menu.any((a) => a.move == m);
+  switch (move.type) {
+    case ActionType.fold:
+      return legal.canCheck ? const PlayerAction.check() : move;
+    case ActionType.check:
+      return move;
+    case ActionType.call:
+      return has(PreflopMove.call) || !legal.canCall ? move : const PlayerAction.fold();
+    case ActionType.raise:
+      final sizes = [
+        if (legal.canRaise)
+          for (final a in menu)
+            if (a.move == PreflopMove.raise) a.raiseTo.clamp(legal.minRaiseTo, legal.maxRaiseTo),
+      ];
+      final allIn = legal.canRaise && has(PreflopMove.allIn);
+      if (allIn && (sizes.isEmpty || move.amount >= legal.maxRaiseTo)) return PlayerAction.raiseTo(legal.maxRaiseTo);
+      if (sizes.isEmpty) {
+        if (legal.canCheck) return const PlayerAction.check();
+        return has(PreflopMove.call) ? const PlayerAction.call() : const PlayerAction.fold();
+      }
+      double distance(int to) => (log(to) - log(move.amount)).abs();
+      var best = sizes.first;
+      for (final to in sizes.skip(1)) {
+        if (distance(to) < distance(best)) best = to;
+      }
+      return PlayerAction.raiseTo(best);
+  }
 }
 
 class _Step {

@@ -13,10 +13,9 @@ class _Seat {
 /// A hand as it was announced: the room seat of each hand seat, with the
 /// token of the person there (null for a bot); the seats as shown, with
 /// the bots' styles and without (for players who don't see them); the
-/// stacks, button and rules; whether spectators see the bots' cards in it
-/// ([seeBots], as the host had it then), and whether a bot plays by the
-/// solver ([gtoBot]: the host's device solves the hand first). Kept while
-/// the hand runs, for members who catch up (see [Snapshot]).
+/// stacks, button and rules; and whether spectators see the bots' cards in
+/// it ([seeBots], as the host had it then). Kept while the hand runs, for
+/// members who catch up (see [Snapshot]).
 typedef _Lineup = ({
   List<int> seats,
   List<String?> tokens,
@@ -28,7 +27,6 @@ typedef _Lineup = ({
   HelpLevel help,
   int turnLimit,
   bool seeBots,
-  bool gtoBot,
 });
 
 /// The poker table of a [Room]: its seats, the game and every hand, from
@@ -856,11 +854,11 @@ class _PokerTable implements _Table {
       help: _settings.help,
       turnLimit: _settings.turnLimit,
       seeBots: room._seeBots,
-      gtoBot: lineup.any((s) => _seats[s].botStyle == 'gto'),
     );
-    // Devices that solve (help, or the host's GTO bots) get longer.
-    final solving = _settings.help != HelpLevel.none || _seats.any((s) => s.botStyle == 'gto');
-    final latest = maxWait ?? minWait + (solving ? OnlineTiming.readyWaitWithHelp : OnlineTiming.readyWait);
+    // Devices say Ready once they have shown the last hand: no device's
+    // solving holds up the deal (help, and the host's GTO bots, come when
+    // they are ready, on each device).
+    final latest = maxWait ?? minWait + OnlineTiming.readyWait;
     _earliestDeal = room._clock.nowMs + minWait.inMilliseconds;
     _latestDeal = room._clock.nowMs + latest.inMilliseconds;
     _minTimer = room._clock.schedule(minWait, () => room._guarded(_maybeDeal));
@@ -962,11 +960,9 @@ class _PokerTable implements _Table {
 
   void _maybeDeal() {
     if (!_dealing || room._clock.nowMs < _earliestDeal) return;
-    // Those who watch don't hold up the deal: but the host's device, which plays the bots, solves first for one
-    // that plays by the solver (seated or not).
-    final announced = _announced!;
-    if (_playersOf(announced).any((e) => !e.$1.ready)) return;
-    if (announced.gtoBot && !(room._host?.ready ?? true)) return;
+    // Those who watch don't hold up the deal, nor does the host's device for its bots (they play from what it has
+    // solved by their turn: see OnlineTableController).
+    if (_playersOf(_announced!).any((e) => !e.$1.ready)) return;
     _deal();
   }
 

@@ -95,8 +95,10 @@ void main() {
     expect(stack, findsOneWidget, reason: 'the stack is in the middle');
     expect(badges(tester), [0, 0, 0], reason: 'nothing dealt yet');
     expect(fanCards(tester), 0);
-    expect(c.preparing, isTrue, reason: 'the auction waits for the step');
+    expect(c.openingPlaying, isTrue, reason: 'the auction waits for the step');
+    expect(c.seatToAct, isNull, reason: 'an animation, not work: nobody is to act while it plays');
     expect(c.playerToMove, isFalse);
+    expect(c.preparing, isFalse, reason: 'nothing to prepare: the coach would start at once');
     // Card by card, before the face-up card: each seat in turn.
     final before = order.faceUpAt!;
     var elapsed = Duration.zero;
@@ -107,7 +109,7 @@ void main() {
       expect(badges(tester), [for (var s = 0; s < 3; s++) (k - s + 2) ~/ 3], reason: '$k cards out');
       expect(fanCards(tester), (k + 2) ~/ 3);
       expect(words, findsNothing, reason: 'nobody is named before the face-up card lands');
-      expect(c.preparing, isTrue);
+      expect(c.openingPlaying, isTrue);
     }
     // Every card out: the stack is gone, the first bidder named; the
     // auction still waits a moment.
@@ -118,10 +120,11 @@ void main() {
     expect(badges(tester), [17, 17, 17]);
     expect(fanCards(tester), 17);
     expect(words, findsOneWidget);
-    expect(c.preparing, isTrue, reason: 'the result holds a moment');
+    expect(c.openingPlaying, isTrue, reason: 'the result holds a moment');
     // Then the auction opens, at its first bidder.
     await tester.pump(LandlordDealClock.total(1) - elapsed + const Duration(milliseconds: 10));
-    expect(c.preparing, isFalse);
+    expect(c.openingPlaying, isFalse);
+    expect(c.seatToAct, c.game.firstBidder, reason: 'the turns go on by themselves');
     expect(c.game.toAct, c.game.firstBidder);
     expect(c.game.history, isEmpty);
     await closeGame(tester, c);
@@ -217,9 +220,9 @@ void main() {
     await tester.pump(gap * 41);
     expect(badges(tester), [17, 17, 17]);
     expect(words, findsOneWidget);
-    expect(c.preparing, isTrue);
+    expect(c.openingPlaying, isTrue);
     await tester.pump(LandlordDealClock.total(PlaybackSpeed.fast.factor) - gap * 51);
-    expect(c.preparing, isFalse, reason: 'the auction opens after about 0.7 s');
+    expect(c.openingPlaying, isFalse, reason: 'the auction opens after about 0.7 s');
     await closeGame(tester, c);
   });
 
@@ -231,7 +234,7 @@ void main() {
     expect(stack, findsNothing, reason: 'no stack: no deal to watch');
     expect(find.byType(CardFlightLayer), findsOneWidget);
     expect(badges(tester), [17, 17, 17]);
-    expect(c.preparing, isFalse);
+    expect(c.openingPlaying, isFalse);
     expect(c.playerToMove, isTrue);
     expect(marks(handFinder), findsOneWidget);
     expect(find.descendant(of: words, matching: find.text('Player bids first')), findsOneWidget);
@@ -259,11 +262,11 @@ void main() {
     expect(find.text('Everyone passed'), findsWidgets);
     await tester.tap(find.byKey(const ValueKey('again')));
     await tester.pump();
-    expect(c.preparing, isTrue);
+    expect(c.openingPlaying, isTrue);
     expect(stack, findsOneWidget, reason: 'the cards go round again');
     expect(c.game.faceUp, isNot(before), reason: 'a new deal, a new face-up card');
     await tester.pump(LandlordDealClock.total(1) + const Duration(milliseconds: 10));
-    expect(c.preparing, isFalse);
+    expect(c.openingPlaying, isFalse);
     expect(words, findsOneWidget);
     await closeGame(tester, c);
   });
@@ -363,7 +366,7 @@ void main() {
           await until(LandlordDealClock.cardGap * 51 + const Duration(milliseconds: 300));
           expect(stack, findsNothing, reason: tag);
           expect(words, findsOneWidget, reason: tag);
-          expect(c.preparing, isTrue, reason: tag);
+          expect(c.openingPlaying, isTrue, reason: tag);
           expect(tester.takeException(), isNull, reason: tag);
           await shot(tester, 'step_result_$tag');
           await closeGame(tester, c);

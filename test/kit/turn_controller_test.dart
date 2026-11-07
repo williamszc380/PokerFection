@@ -21,8 +21,17 @@ class _SlowStartNim extends NimController {
 
   final starts = <Completer<void>>[];
 
+  /// Whether the next games have anything to prepare.
+  bool slow = true;
+
+  /// The moves the coach must list, as a game reads them from its table now.
+  List<String> listing = const [];
+
   @override
-  Future<void> prepare() => (starts..add(Completer())).last.future;
+  Future<void>? prepare() => slow ? (starts..add(Completer())).last.future : null;
+
+  @override
+  List<String> listedMoves(int seat) => listing;
 }
 
 /// Nim where the player must take exactly 1 whenever an odd number of
@@ -295,52 +304,115 @@ void main() {
     expect((await store.load('nim', version: 1))?.game, 'nim');
   });
 
-  group('prepare', () {
-    test('the first turn waits for prepare(): no move is taken and no job starts before it ends', () async {
+  group('prepare (runs alongside the game: no turn waits for it)', () {
+    test('a game with nothing to prepare starts its coach job at once', () async {
+      final game = NimController(jobs: jobs);
+      unawaited(game.newGame());
+      expect(game.preparing, isFalse);
+      expect(game.coachJobs, ['show:0']);
+    });
+
+    test('the player and the bots move while it runs; the coach job waits for it, then starts', () async {
       final game = _SlowStartNim(jobs: jobs);
       unawaited(game.newGame());
       await settle();
-      expect(game.started, isTrue);
       expect(game.preparing, isTrue);
-      expect(() => game.humanMove('1'), throwsStateError, reason: 'the chart is not ready yet');
-      expect(game.record.moves, isEmpty);
-      game.resume();
+      expect(game.playerToMove, isTrue, reason: 'the first turn is not held');
+      expect(game.coachJobs, ['wait:0'], reason: 'the coach needs what prepare() makes');
+      expect(game.coachThinking, isTrue);
+      expect(backend.started, isEmpty);
+      game.humanMove('1');
+      expect(game.record.moves, ['1']);
       await settle();
-      expect(backend.started, isEmpty, reason: 'no coach or bot job before prepare() ends');
+      expect(backend.on(JobLane.bot)?.name, 'nim.bot', reason: 'bots go on meanwhile');
+      backend.answer(backend.on(JobLane.bot)!);
+      await settle();
+      expect(game.record.moves, ['1', '2']);
+      expect(game.seatToAct, 0);
+      expect(game.coachJobs, ['wait:0', 'wait:2'], reason: 'move 0 still waits to be graded');
+      expect(game.marks.first, isNull);
       game.starts.single.complete();
       await settle();
       expect(game.preparing, isFalse);
-      expect(backend.on(JobLane.coach)?.name, 'nim.coach', reason: 'the first coach job starts once it is ready');
-      game.humanMove('3');
-      expect(game.record.moves, ['3']);
+      expect(game.coachJobs, ['show:0', 'show:2']);
+      final running = backend.on(JobLane.coach)!;
+      expect(running.request, contains('"moves":[]'), reason: "one coach job at a time: move 0's first");
     });
 
-    test("a new game while the last one prepares waits for its own prepare(), not the old one's", () async {
+    test('a move made while it runs is graded once its coach job answers', () async {
+      final game = _SlowStartNim(jobs: jobs);
+      unawaited(game.newGame());
+      await settle();
+      game.humanMove('1');
+      await settle();
+      backend.answer(backend.on(JobLane.bot)!);
+      await settle();
+      game.starts.single.complete();
+      await settle();
+      expect(game.marks.first, isNull, reason: 'its job has only just started');
+      final show = backend.on(JobLane.coach)!;
+      expect(show.request, contains('"moves":[]'), reason: 'the position of move 0, not the one on the table');
+      backend.answer(show);
+      await settle();
+      final mark = game.marks.first!;
+      expect([mark.grade, mark.played, mark.best], [DecisionGrade.mistake, '1', '3']);
+      expect(game.coachJobs, ['show:2']);
+    });
+
+    test('a coach job that waited lists the moves of its turn, not those on the table when it starts', () async {
+      final game = _SlowStartNim(jobs: jobs)..listing = ['2'];
+      unawaited(game.newGame());
+      await settle();
+      game.listing = ['1'];
+      game.starts.single.complete();
+      await settle();
+      backend.answer(backend.on(JobLane.coach)!);
+      await settle();
+      expect(game.coach!.listed, {'2'});
+    });
+
+    test("a new game while the last one prepares starts only its own coach jobs, after its own prepare()", () async {
       final game = _SlowStartNim(jobs: jobs);
       unawaited(game.newGame());
       await settle();
       unawaited(game.newGame());
       await settle();
+      expect(game.coachJobs, ['wait:0']);
       game.starts.first.complete();
       await settle();
-      expect(game.preparing, isTrue);
-      expect(backend.started, isEmpty);
+      expect(game.preparing, isTrue, reason: "the new game's prepare() still runs");
+      expect(backend.started, isEmpty, reason: "the old game's prepare() starts nothing");
       game.starts.last.complete();
       await settle();
       expect(game.preparing, isFalse);
       expect(backend.running.map((job) => job.name), ['nim.coach']);
     });
 
-    test('a prepare() that fails is reported, and the game goes on without it', () async {
+    test('a new game with nothing to prepare is not held by the last one that still prepares', () async {
+      final game = _SlowStartNim(jobs: jobs);
+      unawaited(game.newGame());
+      await settle();
+      game.slow = false;
+      unawaited(game.newGame());
+      expect(game.preparing, isFalse);
+      expect(game.coachJobs, ['show:0']);
+      game.starts.single.complete();
+      await settle();
+      expect(backend.running.map((job) => job.name), ['nim.coach']);
+    });
+
+    test('a prepare() that fails is reported, and the coach jobs that waited start without it', () async {
       final reported = <FlutterErrorDetails>[];
       final before = FlutterError.onError;
       FlutterError.onError = reported.add;
       addTearDown(() => FlutterError.onError = before);
       final game = _BrokenStartNim(jobs: jobs);
-      await game.newGame();
+      unawaited(game.newGame());
+      expect(game.coachJobs, ['wait:0']);
       await settle();
       expect(reported.single.exception, isStateError);
       expect(game.preparing, isFalse);
+      expect(game.coachJobs, ['show:0']);
       expect(backend.on(JobLane.coach)?.name, 'nim.coach');
     });
 
@@ -356,6 +428,7 @@ void main() {
       game.starts.single.completeError(const JobCancelled());
       await settle();
       expect(reported, isEmpty);
+      expect(backend.started, isEmpty);
     });
   });
 

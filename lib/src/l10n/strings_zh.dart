@@ -267,9 +267,9 @@ class StringsZh extends S {
   @override
   String randomized(String action) => '随机：$action';
   @override
-  String solvingTable(int percent) => '计算中… $percent%';
-  @override
   String get solvingDecision => '计算中…';
+  @override
+  String lateGrade(DecisionGrade grade, Street street) => '${this.street(street)}：${this.grade(grade)}';
   @override
   String thinking(String name) => '$name…';
   @override
@@ -281,7 +281,7 @@ class StringsZh extends S {
         NoAnswer.multiway => '无 GTO 答案：多人底池',
         NoAnswer.leftSolvedLines => '无 GTO 答案：超出求解路线',
         NoAnswer.solveFailed => '无 GTO 答案：求解失败',
-        null => '无 GTO 答案',
+        NoAnswer.notNeeded || null => '无 GTO 答案',
       };
   @override
   String mistakeReason(MistakeKind kind, SpotActionKind gto, String amount) {
@@ -786,6 +786,7 @@ class StringsZh extends S {
         GlossaryTerm.mixMatch => '匹配度',
         GlossaryTerm.score => '得分',
         GlossaryTerm.grades => '评级',
+        GlossaryTerm.solving => '计算中…',
         GlossaryTerm.noLimit => '无限注',
         GlossaryTerm.minBet => '最小下注',
         GlossaryTerm.minRaise => '最小加注',
@@ -880,6 +881,7 @@ class StringsZh extends S {
             '一半看 EV 损失是否小；关键是弃牌、过牌或跟注、加注的频率，加注尺度只占 10%。历史记录中，白色边框'
             '表示进阶模式下的手牌。',
         GlossaryTerm.grades => '按 EV 损失评定（加注尺度占 10%）：最佳（不超过 0.02 BB）、良好（0.08）、不精确（0.25）、失误（0.75）、严重失误（更多）。',
+        GlossaryTerm.solving => '本次决策的 GTO 答案仍在计算中。可以继续打：答案出来后再为你的动作评级，显示 GTO 会在答案一到就显示。',
         GlossaryTerm.noLimit => '这里使用的下注方式：你可以下注或加注任意数额，最多为你的全部筹码。',
         GlossaryTerm.minBet => '允许的最小下注：一个大盲注。',
         GlossaryTerm.minRaise => '允许的最小加注。标准规则：至少为本街上一次下注或加注的大小（面对 10 的下注，至少加注'

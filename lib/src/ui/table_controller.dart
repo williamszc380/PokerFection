@@ -11,10 +11,13 @@ import '../engine/cards.dart';
 import '../engine/events.dart';
 import '../engine/poker_hand.dart';
 import '../engine/rules.dart';
+import '../game/hand_follower.dart';
+import '../game/hand_snapshot.dart';
 import '../game/pre_action.dart';
 import '../game/table_session.dart';
 import '../gto/action_menu.dart';
 import '../gto/gto_solutions.dart';
+import '../gto/postflop/postflop_tracker.dart' show PostflopTracker;
 import '../gto/preflop/preflop_advisor.dart' show PreflopAdvisor;
 import '../gto/spot_strategy.dart';
 import '../online/mirror.dart';
@@ -39,16 +42,51 @@ enum PlaybackSpeed {
   final double factor;
 }
 
+/// One of the user's decisions: its hand and id (on the device, how many
+/// actions came before it; online, the server's turn), and the players and
+/// bot styles of the table then (a drill saved from it needs them).
+typedef _Decision = ({int hand, int turnId, List<PlayerInfo> players, List<BotStyle?> styles});
+
+/// A move the user made before GTO's answer for it was worked out (the
+/// table doesn't wait for it): scored once the answer comes. [choice] is
+/// the menu's choice played (drawn from [mix], if [drew]); [action] a
+/// raise of another amount, graded as [choice]. [players] and [styles] are
+/// the decision's (see [_Decision]).
+typedef _Unscored = ({
+  int hand,
+  int turnId,
+  List<PlayerInfo> players,
+  List<BotStyle?> styles,
+  List<double> mix,
+  int choice,
+  bool drew,
+  PlayerAction? action,
+  bool oneAction,
+});
+
+/// A Mistake or a Blunder graded after its move, in the hand on screen:
+/// listed when the hand is over.
+typedef LateGrade = ({int hand, Street street, DecisionGrade grade});
+
 /// Runs a [TableSession] for the table screen.
 ///
 /// The engine decides everything instantly; this controller replays its
 /// events one at a time, updating [view] and launching [flying] chips and
 /// cards, so the user can follow what happened.
 ///
-/// In Guess the GTO mode it also makes sure the preflop game is solved
-/// before each hand (solving the next one in the background while the
-/// current hand is played), and runs the "enter your mix, see the score" step.
-/// Each Mistake or Blunder is saved to the [drills], to play again later.
+/// The table never waits for a solve. Each hand is dealt at once, and a
+/// [HandFollower] follows it behind the table for GTO's answers: it solves
+/// the hand's whole game, the user's subgames and the streets, one after
+/// the other, in the order the hand reached them. The user's choices show
+/// at once; GTO's answer joins them when it is ready ([answerPending] until
+/// then). A move made before it plays at once, and is graded when the
+/// answer comes, against that same decision (a Mistake or a Blunder then
+/// shows without holding the table, and is listed when the hand is over:
+/// [lateMistakes]). The bots wait a moment for the solves they play from
+/// ([botBudget]), then play the best they have, which keeps the hand on the
+/// solved lines. The next hand's whole game is solved once this one can't
+/// ask for more. Each Mistake or Blunder is saved to the [drills], to play
+/// again later.
 class TableController extends ChangeNotifier {
   TableController(
     TableConfig config, {
@@ -84,7 +122,8 @@ class TableController extends ChangeNotifier {
   /// What the user may do, while waiting for their decision.
   LegalActions? heroOptions;
 
-  /// Guess the GTO mode: the answer for the user's current decision.
+  /// Guess the GTO mode: the answer for the user's current decision (or,
+  /// with [heroScoreLate], the one just graded).
   SpotStrategy? heroSpot;
 
   /// The user's choices at their current decision (the same list every time;
@@ -95,17 +134,60 @@ class TableController extends ChangeNotifier {
   List<double>? heroMix;
   DecisionScore? heroScore;
 
-  /// While the next hand's preflop game is being solved: 0 to 1.
-  double? preparing;
+  /// The score showing is of a move made before its answer came: the hand
+  /// went on meanwhile, and OK just puts the score away.
+  bool heroScoreLate = false;
 
-  /// While the current street is being solved for the player to act.
-  bool solvingSpot = false;
+  /// What the "why" of the score showing is worked out from, read at its
+  /// decision (see whyInputs).
+  WhyInputs? heroWhy;
+
+  /// Why GTO has no answer for the user's current decision, once that is
+  /// known (null: there is one, it is still on its way, or no reason is
+  /// known).
+  NoAnswer? answerNone;
+
   bool handOver = false;
+
+  /// How long a bot that plays from a solve waits for it after its think
+  /// pause (see Playback.botBudget). Null: as long as it takes (tests that
+  /// check GTO's exact moves).
+  @visibleForTesting
+  Duration? botBudget = Playback.botBudget;
+
+  /// Plays the bots' moves instead of the bots (null: the bot decides), so
+  /// tests can play the same hand however fast the answers come. Played at
+  /// once, like a drill's recorded moves.
+  @visibleForTesting
+  PlayerAction? Function(PokerHand hand, int seat)? scriptedBots;
 
   PlaybackSpeed _speed;
   bool _busy = false;
   bool _disposed = false;
   bool _heroFolded = false;
+
+  /// The decision showing, and whether its answer has come (with or
+  /// without a spot).
+  _Decision? _decision;
+  bool _answered = false;
+
+  /// The followers of the hand on the table and, while it still has
+  /// answers to give, of the hand before (see HandFollower).
+  HandFollower? _follower, _previous;
+
+  /// The next hand's claim on the solves started for it ahead of time.
+  SolveOwner? _nextOwner;
+
+  /// The claim on the user's first decision of the next hand if everyone
+  /// folds to them, solved ahead of time: a guess, so it is its own and
+  /// never made more urgent (the hand's own claim lifts it once the hand
+  /// asks for it), and let go of once someone before the user does more
+  /// than fold (see [_settleAhead]).
+  SolveOwner? _aheadOwner;
+
+  /// The user's moves made before their answers came, oldest first.
+  final List<_Unscored> _unscored = [];
+  final List<LateGrade> _lateMistakes = [];
 
   PlaybackSpeed get speed => _speed;
   set speed(PlaybackSpeed value) {
@@ -126,55 +208,160 @@ class TableController extends ChangeNotifier {
   /// watches, out of chips).
   bool isUserSeat(int seat) => seat == TableSession.heroSeat;
 
+  /// The number of the hand on screen.
+  int get _tableHand => session.handNumber;
+
+  /// The user is choosing, in Guess the GTO mode, and GTO's answer is
+  /// still on its way: the choices work (the move is graded when it
+  /// comes), and Show GTO shows it once it is here.
+  bool get answerPending => guessGto && heroOptions != null && heroSpot == null && !_answered && _decision != null;
+
+  /// Show GTO was pressed before the answer came ([wanted]), or turned
+  /// off again: while the user waits for the answer, the hand's solves come
+  /// first (they all lead to it). The wait, and so the claim, ends when the
+  /// answer comes or turns out to be none, when Show GTO is turned off, when
+  /// the decision is over (the panel lights Show GTO for one decision only:
+  /// at the next one it is pressed again if wanted), or at hand over.
+  void wantAnswerShown([bool wanted = true]) {
+    for (final claim in _shownClaims) {
+      claim.end();
+    }
+    _shownClaims = [if (wanted) for (final owner in _answerOwners) owner.claim(SolvePriority.shown)];
+  }
+
+  /// The claims Show GTO holds while the user waits for the answer (see
+  /// [wantAnswerShown]).
+  List<SolveClaim> _shownClaims = const [];
+
+  /// Whose solves the user's answer comes from: the hand on the table's.
+  Iterable<SolveOwner> get _answerOwners => [?_follower?.owner];
+
+  /// Moves in the hand on screen whose grades are still to come.
+  bool get gradesPending => _unscored.any((played) => played.hand == _tableHand);
+
+  /// The Mistakes and Blunders of the hand on screen graded after their
+  /// moves, in the order they were graded.
+  List<LateGrade> get lateMistakes => [for (final m in _lateMistakes) if (m.hand == _tableHand) m];
+
+  /// The hands followed for their answers (the one on the table last).
+  @visibleForTesting
+  List<HandFollower> get followers => [?_previous, ?_follower];
+
+  /// Completes once the followers have caught up with the table, and every
+  /// answer asked for so far has been given.
+  @visibleForTesting
+  Future<void> caughtUp() async {
+    while (true) {
+      final tails = [for (final f in followers) f.tail];
+      await Future.wait(tails);
+      final now = [for (final f in followers) f.tail];
+      if (now.length == tails.length && [for (var i = 0; i < now.length; i++) identical(now[i], tails[i])].every((same) => same)) {
+        return;
+      }
+    }
+  }
+
   Future<void> startNextHand() async {
     if (_busy) return;
     _busy = true;
     handOver = false;
     _clearHeroDecision();
     _heroFolded = false;
-    if (session.needsSolver) {
-      await _prepareSolution();
-      if (_disposed) return;
-    }
-    final hand = session.startHand();
+    _lateMistakes.clear();
+    // Two hands back: their answers won't come any more (see _follow).
+    _unscored.removeWhere((played) => played.hand < session.handNumber);
+    final hand = session.startHandWith(track: false);
     for (final (i, seat) in view.seats.indexed) {
       seat.style = session.styles[i];
     }
-    // Starts solving the user's decision if they act first (and, rarely, a
-    // hand skips straight past the preflop betting: everyone all-in).
-    await session.afterAction();
-    // With stacks reset every hand, the next hand is known already.
-    if (session.config.resetStacksEachHand) _precomputeNext();
-    await _play(hand.drainEvents());
+    final deal = hand.drainEvents();
+    _follow(hand, deal);
+    _settleAhead(hand);
+    // Rarely, the blinds put everyone all-in: the hand is decided already.
+    _maybePrecompute(hand);
+    await _play(deal);
     await _runUntilHeroOrEnd();
     _busy = false;
     await _playPreAction();
   }
 
-  /// Waits until the next hand's whole preflop game is solved, showing
-  /// progress, and queues the user's first decision after it.
-  Future<void> _prepareSolution() async {
-    final spec = session.upcomingSpec;
-    var advisor = _solutions.ready(spec);
-    if (advisor == null) {
-      final progress = _solutions.progressOf(spec);
-      void update() {
-        preparing = progress.value;
-        _notify();
-      }
-
-      progress.addListener(update);
-      update();
-      try {
-        advisor = await _solutions.solve(spec);
-      } finally {
-        progress.removeListener(update);
-        preparing = null;
+  /// Starts following [hand] (dealt with [deal], its first events) for
+  /// its answers. The hand before is kept while it still has answers to
+  /// give (only what those read), and the one before that let go, its
+  /// solves not started yet dropped.
+  void _follow(PokerHand hand, List<GameEvent> deal) {
+    if (_previous case final old?) _abandon(old);
+    _previous = null;
+    if (_follower case final last?) {
+      // Nobody plays in it any more (a drill's spot ends before its hand
+      // does): what it still solves only grades.
+      last.owner.finish();
+      if (last.pendingAnswers > 0) {
+        _previous = last..trimForAnswers();
+      } else {
+        _abandon(last);
       }
     }
-    session.advisor = advisor;
-    final heroSpec = session.upcomingHeroSpec;
-    if (heroSpec != null) unawaited(_solutions.solve(heroSpec).then((_) {}, onError: (_) {}));
+    _follower = null;
+    final next = _nextOwner;
+    _nextOwner = null;
+    if (!session.needsSolver) {
+      if (next != null) _solutions.drop(next);
+      return;
+    }
+    final owner = next != null && next.hand == hand.handNumber ? next : SolveOwner(hand.handNumber);
+    if (!identical(owner, next) && next != null) _solutions.drop(next);
+    final f = _follower = HandFollower(table: hand, deal: deal, owner: owner);
+    f.onIdle = () {
+      // The hand before has given its last answer: nothing more to keep.
+      if (identical(_previous, f)) {
+        _previous = null;
+        _abandon(f);
+      }
+    };
+    final spec = session.specOf(hand);
+    f.start(() async {
+      final blueprint = _solutions.ready(spec) ?? await _solutions.solve(spec, owner: owner, priority: SolvePriority.bot);
+      final trackers = session.trackersFor(
+        f.hand,
+        blueprint,
+        // The user's subgames grade them; in Free Play they are only for
+        // the GTO bots' replies.
+        subgames: (s, ranges) => _solutions.solveSubgame(s, ranges,
+            owner: owner, priority: guessGto ? SolvePriority.grade : SolvePriority.bot),
+        streets: (s, ranges) => _solutions.solvePostflop(s, ranges,
+            owner: owner, priority: session.hasGtoBotIn(f.hand) ? SolvePriority.bot : SolvePriority.grade),
+        needed: session.streetNeeded,
+      );
+      if (identical(_follower, f) && !_disposed) {
+        // The table's answers, ranges and GTO bots read them from now on.
+        session.advisor = blueprint;
+        session.useTrackers(trackers.preflop, trackers.postflop);
+        _notify();
+      }
+      return trackers;
+    });
+  }
+
+  /// Nothing more is worked out for [f]'s hand.
+  void _abandon(HandFollower f) {
+    f.abandoned = true;
+    _solutions.drop(f.owner);
+  }
+
+  /// Whether anyone still needs solves in [hand]: a GTO bot is still in
+  /// it, or the user in Guess the GTO mode.
+  bool _needsMore(PokerHand hand) => !hand.isOver && session.needsSolver && session.streetNeeded(hand);
+
+  /// Starts on the next hand's solves once this hand can't ask for more:
+  /// when it is decided, or (with stacks reset every hand, so the next one
+  /// is known already) once nobody needs anything more in it.
+  void _maybePrecompute(PokerHand hand) {
+    // Decided: nobody plays in it any more, so whatever made its solves
+    // urgent is over, and what is left of them only grades (behind the
+    // next hand's game).
+    if (_follower case final f? when hand.isOver && f.owner.hand == hand.handNumber) f.owner.finish();
+    if (hand.isOver || (session.config.resetStacksEachHand && !_needsMore(hand))) _precomputeNext();
   }
 
   /// The hand number whose next hand is already being solved.
@@ -186,15 +373,29 @@ class TableController extends ChangeNotifier {
   void _precomputeNext() {
     if (!session.needsSolver || _precomputedAfter == session.handNumber) return;
     _precomputedAfter = session.handNumber;
-    final spec = session.upcomingSpec, heroSpec = session.upcomingHeroSpec;
-    Future<void> solveBoth() async {
-      await _solutions.solve(spec);
-      if (heroSpec != null) await _solutions.solve(heroSpec);
-    }
-
+    final owner = _nextOwner = SolveOwner(session.handNumber + 1);
     // Failures show up when the hand needs the solve; nothing to do here.
-    unawaited(solveBoth().then((_) {}, onError: (_) {}));
+    _quietly(_solutions.solve(session.upcomingSpec, owner: owner, priority: SolvePriority.nextHand));
+    if (_aheadOwner case final old?) _solutions.drop(old);
+    _aheadOwner = null;
+    if (session.upcomingHeroSpec case final heroSpec?) {
+      final ahead = _aheadOwner = SolveOwner(session.handNumber + 1);
+      _quietly(_solutions.solve(heroSpec, owner: ahead, priority: SolvePriority.ahead));
+    }
   }
+
+  /// Lets go of the guess solved ahead of time for [hand] (the user's first
+  /// decision if everyone folds to them) once it can't be used: it was for
+  /// another hand, or someone before the user did more than fold. Until
+  /// then it waits behind everything the hand really asks for.
+  void _settleAhead(PokerHand hand) {
+    final ahead = _aheadOwner;
+    if (ahead == null) return;
+    if (ahead.hand == hand.handNumber && !_aheadMissed(hand, isUserSeat)) return;
+    _aheadOwner = null;
+    _solutions.drop(ahead);
+  }
+
 
   Future<void> heroAct(PlayerAction action) async {
     final hand = session.hand;
@@ -203,11 +404,11 @@ class TableController extends ChangeNotifier {
     _clearHeroDecision();
     if (action.type == ActionType.fold) _heroFolded = true;
     hand.act(action);
-    if (hand.isOver) _precomputeNext();
-    // Start solving a new street while its cards are being dealt on screen.
-    final tracking = session.afterAction();
-    await _play(hand.drainEvents());
-    await tracking;
+    final batch = hand.drainEvents();
+    // The street that begins starts solving while its cards are dealt on screen.
+    _follower?.step(batch);
+    _maybePrecompute(hand);
+    await _play(batch);
     await _runUntilHeroOrEnd();
     _busy = false;
     await _playPreAction();
@@ -224,15 +425,23 @@ class TableController extends ChangeNotifier {
 
   /// Scores the user's mix (how often to take each action, adding up to 1)
   /// and fixes the action to play: [choice], or one drawn from the mix.
+  /// Before GTO's answer comes, the move plays at once and is scored when
+  /// it does.
   void submitMix(List<double> mix, {int? choice, bool oneAction = false}) {
     final spot = heroSpot;
     final hand = session.hand;
-    if (spot == null || hand == null || heroScore != null) return;
+    final options = heroOptions;
+    if (hand == null || heroScore != null || options == null) return;
+    if (spot == null) {
+      if (answerPending) unawaited(_playBeforeAnswer(mix, choice: choice, oneAction: oneAction));
+      return;
+    }
     heroMix = List.unmodifiable(mix);
     heroScore = scoreDecision(spot, mix);
     heroDrew = choice == null;
     heroPlay = choice ?? _draw(spot, mix);
-    session.history.last.decisions.add(DecisionRecord(
+    heroWhy = whyInputs(hand, options, session.postflop);
+    _recordOf(_tableHand)?.addDecision(DecisionRecord(
       street: hand.street,
       board: hand.board,
       spot: spot,
@@ -245,19 +454,57 @@ class TableController extends ChangeNotifier {
     _notify();
   }
 
-  /// Online: the server's turn a decision is recorded at.
-  int? get _recordTurnId => null;
+  /// The decision a decision's record is kept with: on the device, how
+  /// many actions came before it (online, the server's turn).
+  int? get _recordTurnId => _decision?.turnId;
+
+  /// The record of hand [number], if the user played it.
+  HandRecord? _recordOf(int number) {
+    for (final record in session.history.reversed) {
+      if (record.handNumber == number) return record;
+    }
+    return null;
+  }
+
+  /// Plays the user's move at once, before GTO's answer for it has come
+  /// ([mix], and [choice] of the menu, or one drawn from the mix; [action]
+  /// a raise of another amount): it is graded when the answer comes (see
+  /// [_answerCame]).
+  Future<void> _playBeforeAnswer(List<double> mix, {int? choice, required bool oneAction, PlayerAction? action}) async {
+    final d = _decision, menu = heroMenu;
+    if (d == null || menu == null) return;
+    final play = choice ?? _drawFrom(menu, mix);
+    _unscored.add((
+      hand: d.hand,
+      turnId: d.turnId,
+      players: d.players,
+      styles: d.styles,
+      mix: List.unmodifiable(mix),
+      choice: play,
+      drew: choice == null,
+      action: action,
+      oneAction: oneAction,
+    ));
+    await heroAct(action ?? menu[play].action);
+  }
 
   /// The user's decision was just scored: a Mistake or a Blunder is saved
   /// to the drills (the same spot saved before starts over), and the table
   /// says so ([savedToDrills]).
   void _scored(DecisionScore score) {
-    final drills = this.drills, hand = session.hand;
-    if (drills == null || hand == null || score.grade.index < DecisionGrade.mistake.index) return;
+    final hand = session.hand;
+    if (hand != null) _scoredAt(score, hand, session.players, session.styles);
+  }
+
+  /// [_scored], for the decision [at] stands at (on the device, maybe its
+  /// hand follower), played by [players] with [styles].
+  void _scoredAt(DecisionScore score, PokerHand at, List<PlayerInfo> players, List<BotStyle?> styles) {
+    final drills = this.drills;
+    if (drills == null || score.grade.index < DecisionGrade.mistake.index) return;
     final spot = DrillSpot.at(
-      hand,
-      players: session.players,
-      styles: session.styles,
+      at,
+      players: players,
+      styles: styles,
       grade: score.grade,
       evLoss: score.evLoss,
       now: drills.now(),
@@ -290,10 +537,17 @@ class TableController extends ChangeNotifier {
   /// Simple training: plays [choice] and grades it against GTO. Better plays
   /// go ahead at once; after a mistake or a blunder, GTO's answer shows first
   /// (then [continueHand]). A raise of another amount is played as [action]
-  /// and graded as [choice], the nearest size GTO has.
+  /// and graded as [choice], the nearest size GTO has. Before GTO's answer
+  /// comes, the move plays at once and is graded when it does.
   Future<void> playGraded(int choice, {PlayerAction? action}) async {
-    final spot = heroSpot;
-    if (spot == null) return;
+    final spot = heroSpot, menu = heroMenu;
+    if (spot == null) {
+      if (answerPending && menu != null && heroScore == null) {
+        await _playBeforeAnswer([for (var i = 0; i < menu.length; i++) i == choice ? 1.0 : 0.0],
+            choice: choice, oneAction: true, action: action);
+      }
+      return;
+    }
     submitMix([for (var i = 0; i < spot.actions.length; i++) i == choice ? 1.0 : 0.0],
         choice: choice, oneAction: true);
     heroAction = action;
@@ -308,12 +562,113 @@ class TableController extends ChangeNotifier {
     _notify();
   }
 
-  /// After scoring: plays the chosen (or drawn) action.
+  /// After scoring: plays the chosen (or drawn) action. A score of a move
+  /// played already (graded after it) just goes.
   Future<void> continueHand() async {
+    if (heroScoreLate || heroOptions == null) {
+      _clearHeroDecision();
+      _notify();
+      return;
+    }
     final spot = heroSpot, play = heroPlay;
     if (spot == null || play == null || heroScore == null) return;
     await heroAct(heroAction ?? spot.actions[play].action);
   }
+
+  // ---------------------------------------------------------------------------
+  // Answers that come after their moves (on the device and online)
+  // ---------------------------------------------------------------------------
+
+  /// GTO's answer [a] for the user's decision [d], worked out on [at] (a
+  /// copy of the hand standing at that decision; its trackers' [postflop]
+  /// gives the "why"). It joins the choices if they still show; a move
+  /// already made there is scored now.
+  void _answerCame(_Decision d, GtoAnswer a, PokerHand? at, {PostflopTracker? postflop}) {
+    if (_disposed) return;
+    if (_showing(d)) {
+      // Nobody waits for this answer any more.
+      wantAnswerShown(false);
+      _answered = true;
+      answerNone = a.none;
+      if (a.spot case final spot?) {
+        heroSpot = spot;
+        heroMenu = spot.actions;
+      }
+    } else {
+      final i = _unscored.indexWhere((played) => played.hand == d.hand && played.turnId == d.turnId);
+      if (i >= 0) {
+        final played = _unscored.removeAt(i);
+        if ((a.spot, at) case (final spot?, final at?)) _scoreLate(played, spot, at, postflop ?? session.postflop);
+      }
+    }
+    _notify();
+  }
+
+  /// Whether the choices of decision [d] still show.
+  bool _showing(_Decision d) => heroOptions != null && identical(_decision, d);
+
+  /// Scores [played], a move made before its answer [spot] came, worked out
+  /// on [at] (at that decision, followed by [postflop] after the flop), and
+  /// records it with its hand, in the hand's order. A drill is saved from
+  /// [at], with the decision's players. A Mistake or a Blunder in the hand
+  /// on screen shows (without holding the table) unless the user is
+  /// choosing again already, and is listed when the hand is over.
+  void _scoreLate(_Unscored played, SpotStrategy spot, PokerHand at, PostflopTracker? postflop) {
+    final record = _recordOf(played.hand);
+    final actions = spot.actions;
+    if (record == null || played.mix.length != actions.length) return;
+    final List<double> mix;
+    final int? choice;
+    if (played.oneAction) {
+      choice = _solvedChoice(actions, played.choice, played.action);
+      if (choice == null) return;
+      mix = [for (var i = 0; i < actions.length; i++) i == choice ? 1.0 : 0.0];
+    } else {
+      // Shares on choices GTO hasn't solved drop out.
+      final kept = [for (final (i, share) in played.mix.indexed) actions[i].available ? share : 0.0];
+      final total = kept.fold(0.0, (a, b) => a + b);
+      if (total <= 0) return;
+      mix = [for (final share in kept) share / total];
+      choice = actions[played.choice].available ? played.choice : null;
+    }
+    final score = scoreDecision(spot, mix);
+    record.addDecision(
+      DecisionRecord(
+        street: at.street,
+        board: at.board,
+        spot: spot,
+        mix: List.unmodifiable(mix),
+        score: score,
+        oneAction: played.oneAction,
+        turnId: played.turnId,
+      )..played = choice,
+    );
+    _scoredAt(score, at, played.players, played.styles);
+    final onScreen = played.hand == _tableHand;
+    if (onScreen && score.grade.index >= DecisionGrade.mistake.index) {
+      _lateMistakes
+        ..removeWhere((m) => m.hand != played.hand)
+        ..add((hand: played.hand, street: at.street, grade: score.grade));
+    }
+    if (heroOptions != null || !onScreen || !_showsLate(score, played)) return;
+    heroSpot = spot;
+    heroMix = List.unmodifiable(mix);
+    heroScore = score;
+    heroPlay = choice;
+    heroDrew = played.drew;
+    heroAction = played.action;
+    heroWhy = whyInputs(at, at.legalActions(), postflop);
+    heroScoreLate = true;
+  }
+
+  /// Whether a score that came after its move shows: only a Mistake or a
+  /// Blunder, in simple and advanced training alike. The table has moved
+  /// on, so a Best or Good play just joins the recent scores rather than
+  /// pop up over it.
+  bool _showsLate(DecisionScore score, _Unscored played) => score.grade.index >= DecisionGrade.mistake.index;
+
+
+
 
   /// Shows or hides one bot's cards, right away and in later hands.
   void toggleCards(int seat) {
@@ -372,32 +727,9 @@ class TableController extends ChangeNotifier {
     _notify();
   }
 
-  /// Waits for the solve the player to act needs, if it is still running:
-  /// before the flop, the user's subgame (for their answer in Guess the GTO
-  /// mode, and for the bots' replies to their choice); after it, the
-  /// street (for the user in Guess the GTO mode, or a GTO bot).
-  Future<void> _waitForAnswers() async {
-    final hand = session.hand!;
-    final Future<void> wait;
-    if (hand.street == Street.preflop) {
-      final heroTurn = hand.toAct == TableSession.heroSeat;
-      if (!session.preflopPending || (heroTurn && !guessGto)) return;
-      wait = session.preflopReady;
-    } else {
-      final tracker = session.postflop;
-      if (tracker == null || !session.needsPostflopAnswer || !tracker.solving) return;
-      wait = tracker.ready;
-    }
-    solvingSpot = true;
-    _notify();
-    try {
-      await wait;
-    } finally {
-      solvingSpot = false;
-    }
-  }
-
   void _clearHeroDecision() {
+    // Show GTO pressed at this decision was for this one.
+    wantAnswerShown(false);
     heroOptions = null;
     heroSpot = null;
     heroMenu = null;
@@ -406,11 +738,23 @@ class TableController extends ChangeNotifier {
     heroPlay = null;
     heroDrew = false;
     heroAction = null;
+    heroScoreLate = false;
+    heroWhy = null;
+    answerNone = null;
+    _decision = null;
+    _answered = false;
   }
 
   @override
   void dispose() {
     _disposed = true;
+    // Solves not started yet for this table won't be needed.
+    for (final f in followers) {
+      _abandon(f);
+    }
+    for (final owner in [?_nextOwner, ?_aheadOwner]) {
+      _solutions.drop(owner);
+    }
     unawaited(_saved.close());
     super.dispose();
   }
@@ -422,30 +766,71 @@ class TableController extends ChangeNotifier {
       final seat = hand.toAct!;
       view.actingSeat = seat;
       _notify();
-      await _waitForAnswers();
-      if (_disposed) return;
-      final recorded = _recordedMove(seat);
+      final recorded = _recordedMove(seat) ?? (seat == TableSession.heroSeat ? null : scriptedBots?.call(hand, seat));
       if (seat == TableSession.heroSeat && recorded == null) {
-        heroOptions = hand.legalActions();
-        heroSpot = session.heroSpot();
-        heroMenu = heroSpot?.actions ?? actionMenu(hand);
-        // A pre-action is played once the table is free (see _playPreAction).
-        _due = _preActionChoice();
-        if (_due == null) _sound(SoundEffect.yourTurn);
-        _notify();
+        _heroTurn(hand);
         return;
       }
       await _pause(Playback.botThink);
       if (_disposed) return;
+      final f = _follower;
+      if (recorded == null && f != null && session.playsFromSolve(hand, seat)) {
+        // A moment more for what it plays from (its hand's solves first,
+        // while it waits); then the best it has, which keeps the hand on
+        // the solved lines.
+        final waiting = f.owner.claim(SolvePriority.bot);
+        try {
+          final ready = f.readyFor(seat, session.styles[seat]);
+          final budget = botBudget;
+          if (budget == null) {
+            await ready.then((_) {}, onError: (Object _) {});
+          } else {
+            await _within(ready, budget);
+          }
+        } finally {
+          waiting.end();
+        }
+        if (_disposed) return;
+      }
       hand.act(recorded ?? session.botDecision());
-      if (hand.isOver) _precomputeNext();
-      final tracking = session.afterAction();
-      await _play(hand.drainEvents());
-      await tracking;
+      final batch = hand.drainEvents();
+      // The street that begins starts solving while its cards are dealt on screen.
+      _follower?.step(batch);
+      _settleAhead(hand);
+      _maybePrecompute(hand);
+      await _play(batch);
     }
     view.actingSeat = null;
     session.finishHand();
     handOver = true;
+    _notify();
+  }
+
+  /// The user's turn in [hand]: their choices show at once, with GTO's
+  /// answer if it is worked out already, else once it is (Guess the GTO
+  /// mode). A score of a move graded late that still shows goes.
+  void _heroTurn(PokerHand hand) {
+    _clearHeroDecision();
+    heroOptions = hand.legalActions();
+    heroSpot = guessGto ? session.heroSpot() : null;
+    heroMenu = heroSpot?.actions ?? actionMenu(hand);
+    final d = _decision = (
+      hand: hand.handNumber,
+      turnId: decisionIdOf(hand),
+      players: List.of(session.players),
+      styles: List.of(session.styles),
+    );
+    if (guessGto && heroSpot == null) {
+      final f = _follower;
+      if (f == null) {
+        _answered = true;
+      } else {
+        f.answer((a, at) => _answerCame(d, a, at, postflop: f.postflop));
+      }
+    }
+    // A pre-action is played once the table is free (see _playPreAction).
+    _due = _preActionChoice();
+    if (_due == null) _sound(SoundEffect.yourTurn);
     _notify();
   }
 
@@ -527,8 +912,9 @@ class TableController extends ChangeNotifier {
   /// GTO when there is an answer (simple training), else at once.
   Future<void> _playChoice(int choice) => _gradesPlay ? playGraded(choice) : heroAct(heroMenu![choice].action);
 
-  /// Whether the user's play at this decision is graded.
-  bool get _gradesPlay => heroSpot != null;
+  /// Whether the user's play at this decision is graded (now, or once
+  /// GTO's answer comes).
+  bool get _gradesPlay => heroSpot != null || answerPending;
 
   // ---------------------------------------------------------------------------
   // Event playback
@@ -759,3 +1145,47 @@ class TableController extends ChangeNotifier {
     notifyListeners();
   }
 }
+
+/// As in simple training on the device, a good play just goes on (its
+/// score joins the recent ones): no score shows unless it is a mistake or
+/// a blunder, or a mix was set (advanced training).
+bool _quietGrade(DecisionScore score, {required bool oneAction}) =>
+    oneAction && score.grade.index < DecisionGrade.mistake.index;
+
+/// [choice] of [actions] (the same menu, now with GTO's answer) if GTO
+/// has solved it; for a raise it hasn't, the nearest size it has (for a
+/// raise of another amount, [action], nearest to that). Null if none.
+int? _solvedChoice(List<SpotAction> actions, int choice, PlayerAction? action) {
+  final chosen = actions[choice];
+  if (chosen.available) return choice;
+  if (chosen.kind != SpotActionKind.raise && chosen.kind != SpotActionKind.allIn) return null;
+  final to = action?.amount ?? chosen.amount;
+  int? best;
+  var distance = double.infinity;
+  for (final (i, a) in actions.indexed) {
+    if (!a.available || (a.kind != SpotActionKind.raise && a.kind != SpotActionKind.allIn)) continue;
+    final d = (log(a.amount) - log(to)).abs();
+    if (d < distance) (distance, best) = (d, i);
+  }
+  return best;
+}
+
+/// Whether [future] completes (without failing) within [limit].
+Future<bool> _within(Future<void> future, Duration limit) =>
+    future.timeout(limit.isNegative ? Duration.zero : limit).then((_) => true, onError: (Object _) => false);
+
+/// Whether someone before the user's first move in [hand] did more than
+/// fold: the user's first decision isn't the one guessed and solved ahead
+/// of time (the one if everyone folds to them).
+bool _aheadMissed(PokerHand hand, bool Function(int seat) isUser) {
+  for (final e in hand.log) {
+    if (e is! ActionTaken || e.street != Street.preflop) continue;
+    if (isUser(e.seat)) return false;
+    if (e.kind != ActionKind.fold) return true;
+  }
+  return false;
+}
+
+/// Runs [future] for its effect only: a failure shows up where the result
+/// is needed.
+void _quietly(Future<void> future) => unawaited(future.then((_) {}, onError: (Object _) {}));

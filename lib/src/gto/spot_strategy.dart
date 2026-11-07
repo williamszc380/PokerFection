@@ -8,7 +8,16 @@ enum SpotActionKind { fold, check, call, raise, allIn }
 enum Unavailable { checkIsFree, raisingNotAllowed, notSolved }
 
 /// Why a decision has no GTO answer.
-enum NoAnswer { multiway, leftSolvedLines, solveFailed }
+enum NoAnswer {
+  multiway,
+  leftSolvedLines,
+  solveFailed,
+
+  /// Nobody needs the answers: the street isn't solved (the user folded,
+  /// and no GTO bot or coach is left to play from it), or a solve it would
+  /// start from was let go of. Never shown: it reads like no notice at all.
+  notNeeded,
+}
 
 /// One choice the user can put a percentage on.
 class SpotAction {

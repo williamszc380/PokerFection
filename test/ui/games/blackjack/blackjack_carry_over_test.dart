@@ -1,7 +1,8 @@
 // What a new game takes from the last one, and leaving a game early:
 // - a game started from the setup keeps the last game's screen toggles
 //   (☰ Count and the coach chip), as the other games' setups do;
-// - leaving while the strategy chart is still being made is not an error;
+// - a new shoe deals at once: nothing waits for the strategy chart but the
+//   coach, and leaving while it is still being made is not an error;
 // - the setup uses a PC screen's room, the feedback names even money,
 //   and the strategy guide's rule chips answer the mouse with a hand cursor;
 // - a table without a hole card can take only the original bets, chosen in
@@ -17,10 +18,12 @@ import 'package:pokerfection/src/games/blackjack/blackjack.dart';
 import 'package:pokerfection/src/kit/jobs/jobs.dart';
 import 'package:pokerfection/src/ui/games/blackjack/blackjack_controller.dart';
 import 'package:pokerfection/src/ui/games/blackjack/blackjack_guides.dart';
+import 'package:pokerfection/src/ui/games/blackjack/blackjack_screen.dart';
 import 'package:pokerfection/src/ui/games/blackjack/blackjack_setup.dart';
 import 'package:pokerfection/src/app/app_settings.dart';
 import 'package:pokerfection/src/ui/games/blackjack/l10n/blackjack_strings.dart';
 import 'package:pokerfection/src/ui/kit/game_sounds.dart';
+import 'package:pokerfection/src/ui/kit/kit_scope.dart';
 import 'package:pokerfection/src/ui/kit/l10n/kit_strings.dart';
 import 'package:pokerfection/src/ui/kit/move_feedback.dart';
 import 'package:pokerfection/src/ui/table_controller.dart' show PlaybackSpeed;
@@ -55,6 +58,46 @@ void main() {
     await closeGame(tester);
   });
 
+  testWidgets('a new shoe deals at once while the chart is made: Deal and the decisions are not greyed out, the '
+      'thin bar runs, and the coach answers once the chart is in', (tester) async {
+    final backend = ManualBackend({for (final job in blackjackJobs) job.name: job});
+    await pumpShot(
+      tester,
+      BlackjackScreen(settings: coachOn, random: FixedSeed(seed16v10)),
+      size: const Size(1280, 800),
+      wrap: (child) => KitScope(newJobs: () => Jobs.using(backend), lastGames: LastGames(), child: child),
+    );
+    await tester.pump();
+    final game = gameOf(tester);
+    expect(game.preparing, isTrue);
+    expect(backend.on(JobLane.coach)?.name, 'blackjack.chart');
+    expect(find.byType(LinearProgressIndicator), findsWidgets, reason: 'a notice that the coach is working');
+    final deal = find.byKey(const ValueKey('deal'));
+    expect(tester.widget<FilledButton>(deal).onPressed, isNotNull, reason: 'Deal works at once');
+    await tester.tap(deal);
+    await settleGame(tester);
+    expect(game.record.moves, [dealMove]);
+    expect(game.betweenRounds, isFalse, reason: 'a hard 16 against a ten: a decision');
+    final stand = find.descendant(
+      of: find.byKey(const ValueKey('action stand')),
+      matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+    );
+    expect(tester.widget<ButtonStyleButton>(stand).onPressed, isNotNull, reason: 'the decision is not held');
+    expect(game.coach, isNull, reason: 'its coach job waits for the chart');
+    backend.answer(backend.on(JobLane.coach)!);
+    await tester.pump();
+    await tester.pump();
+    final coach = backend.on(JobLane.coach)!;
+    expect(coach.name, 'blackjack.coach');
+    expect(coach.request, contains('"chart":'));
+    backend.answer(coach);
+    await tester.pump();
+    await tester.pump();
+    expect(game.coach, isNotNull);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    await closeGame(tester);
+  });
+
   test('leaving while the chart is being made reports no error', () async {
     final reported = <FlutterErrorDetails>[];
     final before = FlutterError.onError;
@@ -72,6 +115,8 @@ void main() {
     final starting = game.newGame();
     await settle();
     expect(game.preparing, isTrue);
+    expect(game.playerToMove, isTrue, reason: 'the chart holds nothing: Deal works at once');
+    game.humanMove(dealMove);
     game.dispose(); // the player taps Back during the chart's second
     await starting;
     await settle();

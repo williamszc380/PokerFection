@@ -29,4 +29,20 @@ void main() {
     await expectLater(cache.get(key, () async => throw StateError('no')), throwsStateError);
     expect(await cache.get(key, () async => 7), 7);
   });
+
+  test('a kept solve tells the caller it was asked for again; a forgotten one is solved again at once', () async {
+    final cache = SolveCache<int>(4);
+    final key = SolveKey('a', [Float64List(3)]);
+    var asked = 0, solves = 0;
+    Future<int> solve() async => ++solves;
+    expect(await cache.get(key, solve, kept: () => asked++), 1);
+    expect(asked, 0, reason: 'the first request starts it');
+    expect(await cache.get(key, solve, kept: () => asked++), 1);
+    expect(asked, 1);
+    expect(cache.contains(key), isTrue);
+    cache.forget(key);
+    expect(cache.contains(key), isFalse);
+    expect(await cache.get(key, solve, kept: () => asked++), 2);
+    expect(asked, 1);
+  });
 }

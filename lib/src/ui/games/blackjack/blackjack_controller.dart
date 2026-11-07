@@ -67,9 +67,12 @@ class BlackjackSettings {
 /// then New shoe starts the next game with the same rules. The dealer
 /// plays inside the engine, so nobody else ever has a turn.
 ///
-/// The strategy chart for the rules is made once, by its own job, before
-/// the first turn ([prepare]), and goes with every coach job, since each
-/// job starts in a fresh isolate or worker with nothing cached.
+/// The strategy chart for the rules is made once, by its own job ([prepare]),
+/// and goes with every coach job, since each job starts in a fresh isolate
+/// or worker with nothing cached. Turns don't wait for it: Deal and the
+/// moves work at once on a new shoe, and the kit holds back the coach's
+/// jobs until the chart is made, so every answer carries it (a move made
+/// meanwhile is graded when its job answers).
 class BlackjackController extends TurnController {
   BlackjackController({
     required this.settings,
@@ -174,11 +177,12 @@ class BlackjackController extends TurnController {
   }
 
   /// The chart job, once per rules: a new shoe with the same rules keeps
-  /// the chart. The chart's play tags the coach's answers, so in Training
-  /// no turn starts before it (Free Play has no coach and needs none). If
-  /// the job fails, coach jobs go without a chart and the engine makes its
-  /// own. Leaving while it runs cancels it, and the kit reports nothing
-  /// for a game that was left.
+  /// the chart. The chart's play tags the coach's answers. Turns don't wait
+  /// for it: the kit defers the coach's jobs until it ends, so every answer
+  /// carries the chart, and Deal works at once (Free Play has no coach and
+  /// needs none). If the job fails, coach jobs go without a chart and the
+  /// engine makes its own. Leaving while it runs cancels it, and the kit
+  /// reports nothing for a game that was left.
   @override
   Future<void> prepare() async {
     if (_chart != null || !training) return;

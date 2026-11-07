@@ -36,6 +36,10 @@ class JobRequest {
 /// Training) starts the coach's answer for the position, even while the
 /// coach is hidden, because that answer grades the move. When an animation
 /// runs, the game answers null from [seatToAct] and calls [resume] after.
+///
+/// No turn waits for the coach or for [prepare]: the player can move as
+/// soon as it is their turn, and a move made before its answer is graded
+/// when the answer comes.
 abstract class TurnController extends ChangeNotifier {
   TurnController({
     required this.gameKey,
@@ -70,11 +74,16 @@ abstract class TurnController extends ChangeNotifier {
   /// null. Seeds come from [nextGameSeed].
   GameRecord deal({GameRecord? previous});
 
-  /// Work to finish before the first turn (Blackjack: the strategy chart
-  /// job). The first turn waits for it: until it ends, [preparing] is true,
-  /// no bot or coach job starts and [humanMove] throws. If it throws, the
-  /// error is reported and the game goes on without it.
-  Future<void> prepare() async {}
+  /// Work started with each game that the coach needs (Blackjack: the
+  /// strategy chart job). Turns don't wait for it: coach jobs start once it
+  /// ends (or fails); bots and moves go on meanwhile, and a move made before
+  /// its coach job could start is graded when that job answers. Until it
+  /// ends, [preparing] is true. If it throws, the error is reported and the
+  /// coach goes on without it. Null (the default): nothing to prepare, so
+  /// the coach's first job starts at once. An animation that must hold the
+  /// turns (a deal's opening) doesn't belong here: the game answers null
+  /// from [seatToAct] while it plays and calls [resume] after.
+  Future<void>? prepare() => null;
 
   /// Plays [move] for [seat] on the engine and plays its sound; throws if
   /// it is illegal (nothing changes then).
@@ -181,8 +190,9 @@ abstract class TurnController extends ChangeNotifier {
   /// Whether a game has been dealt.
   bool get started => _record != null;
 
-  /// The game is dealt but [prepare] hasn't finished: nobody moves yet (the
-  /// scaffold greys out the game's buttons and keys meanwhile).
+  /// The game is dealt but [prepare] hasn't finished. Only the coach's jobs
+  /// wait for it (the scaffold runs a thin bar meanwhile); the player and
+  /// the bots move as usual.
   bool get preparing => _preparing;
 
   /// The game so far (rules, seats, deal, moves, marks, result, extra).
@@ -212,7 +222,8 @@ abstract class TurnController extends ChangeNotifier {
   CoachAnswer? get coach => _current?.answer;
 
   /// The coach is working on the answer for the player's turn (or on a
-  /// listed move its first answer left out).
+  /// listed move its first answer left out), or its job waits for [prepare]
+  /// to end.
   bool get coachThinking {
     final task = _current;
     return task != null && !task.failed && (task.answer == null || task.completing.isNotEmpty);
@@ -262,9 +273,10 @@ abstract class TurnController extends ChangeNotifier {
     return move != null && playFromCoach(move);
   }
 
-  /// Whether the player can move now (their turn, the game ready).
+  /// Whether the player can move now: their turn (never held for [prepare]
+  /// or the coach).
   bool get playerToMove {
-    final seat = _record == null || _preparing || isOver ? null : seatToAct;
+    final seat = _record == null || isOver ? null : seatToAct;
     return seat != null && isHuman(seat);
   }
 
@@ -399,17 +411,37 @@ abstract class TurnController extends ChangeNotifier {
     _record = fresh.copyWith(extra: extra, played: DateTime.now());
     _finished = false;
     _lastMoverBot = false;
-    _preparing = true;
     _save();
-    _notify();
+    // The first turn doesn't wait for prepare(): it runs alongside.
+    _prepareAlongside();
+    _advance();
+  }
+
+  /// Starts [prepare], if the game has anything to prepare, and lets the
+  /// game go on meanwhile.
+  void _prepareAlongside() {
+    Future<void>? work;
+    try {
+      work = prepare();
+    } on Object catch (error, stack) {
+      work = Future.error(error, stack);
+    }
+    if (work == null) return;
+    _preparing = true;
+    unawaited(_afterPrepare(work));
+  }
+
+  /// Once [work] ends (or fails), the coach jobs that waited for it start,
+  /// each with the moves listed at its turn.
+  Future<void> _afterPrepare(Future<void> work) async {
     final generation = _generation;
     try {
-      await prepare();
+      await work;
     } on Object catch (error, stack) {
       // Left (or started again) meanwhile: its work was cancelled with the
       // game, which is no error.
       if (generation != _generation || _disposed) return;
-      // The game goes on without what prepare() made (Blackjack's coach
+      // The coach goes on without what prepare() made (Blackjack's coach
       // then builds its chart itself); the error still shows in the log.
       FlutterError.reportError(FlutterErrorDetails(
         exception: error,
@@ -420,12 +452,15 @@ abstract class TurnController extends ChangeNotifier {
     }
     if (generation != _generation || _disposed) return;
     _preparing = false;
-    _advance();
+    for (final task in [..._show.values]) {
+      if (task.handle == null) _launch(task);
+    }
+    _notify();
   }
 
   /// The player plays [move]. Throws (and changes nothing) if it is illegal.
   void humanMove(String move) {
-    final seat = _record == null || _preparing || isOver ? null : seatToAct;
+    final seat = _record == null || isOver ? null : seatToAct;
     if (seat == null || !isHuman(seat)) throw StateError('Not your turn');
     final i = record.moves.length;
     applyMove(seat, move);
@@ -491,7 +526,7 @@ abstract class TurnController extends ChangeNotifier {
   // ---- the loop ----
 
   void _advance() {
-    if (_disposed || _record == null || _preparing) return;
+    if (_disposed || _record == null) return;
     if (isOver) {
       _finish();
       _notify();
@@ -592,7 +627,7 @@ abstract class TurnController extends ChangeNotifier {
     }
     if (generation != _generation || _disposed || _forcedAt != i) return;
     _forcedAt = null;
-    if (_preparing || isOver || record.moves.length != i || seatToAct != seat) return;
+    if (isOver || record.moves.length != i || seatToAct != seat) return;
     applyMove(seat, move);
     _record = record.withMove(move);
     _lastMoverBot = false;
@@ -602,18 +637,27 @@ abstract class TurnController extends ChangeNotifier {
     _advance();
   }
 
+  /// The coach's answer for the player's turn at move [i]. The moves it
+  /// must list are taken now, at the turn, because a game reads them from
+  /// the position on the table; the job starts now, or once [prepare] ends.
   _ShowTask _startShow(int i, int seat, {required bool deep}) {
+    final task = _ShowTask(i, seat, listedMoves(seat).toSet(), deep: deep);
+    _show[i] = task;
+    if (!_preparing) _launch(task);
+    return task;
+  }
+
+  /// Starts [task]'s coach job, on the position at its move.
+  void _launch(_ShowTask task) {
     final generation = _generation;
+    final _ShowTask(index: i, :seat, :deep, :listed) = task;
     final request = coachRequest(record.upTo(i), seat, deep: deep, seed: mixSeed(record.seed, i, 99));
-    final handle = jobs.start(
+    final handle = task.handle = jobs.start(
       request.job,
       request.input,
       lane: JobLane.coach,
       kind: deep ? JobKind.coachDeep : request.kind,
     );
-    final task = _ShowTask(i, seat, handle, deep: deep);
-    _show[i] = task;
-    final listed = listedMoves(seat).toSet();
     handle.result.then(
       (output) {
         if (generation != _generation || _show[i] != task) return;
@@ -640,7 +684,6 @@ abstract class TurnController extends ChangeNotifier {
         _notify();
       },
     );
-    return task;
   }
 
   /// Asks the coach to rate [move], a listed move [task]'s answer left out,
@@ -744,6 +787,8 @@ abstract class TurnController extends ChangeNotifier {
     _show.clear();
     _grades.clear();
     _ranges.clear();
+    // The last game's prepare() no longer counts (the next game starts its own).
+    _preparing = false;
     _chosen = null;
     _bot = null;
     _botBusy = false;
@@ -761,13 +806,16 @@ abstract class TurnController extends ChangeNotifier {
 
   // ---- for tests ----
 
-  /// Coach jobs alive now: 'show:3', 'deep:3', 'list:3' (a listed move
-  /// being added), 'grade:1', 'range:1' (seat 1's) (to check what is
-  /// cancelled and what isn't).
+  /// Coach jobs alive now: 'show:3', 'deep:3', 'wait:3' (one waiting for
+  /// [prepare] to end), 'list:3' (a listed move being added), 'grade:1',
+  /// 'range:1' (seat 1's) (to check what is cancelled and what isn't).
   @visibleForTesting
   List<String> get coachJobs => [
         for (final task in _show.values) ...[
-          if (!task.handle.isDone) '${task.deep ? 'deep' : 'show'}:${task.index}',
+          if (task.handle == null)
+            'wait:${task.index}'
+          else if (!task.handle!.isDone)
+            '${task.deep ? 'deep' : 'show'}:${task.index}',
           for (final extra in task.extras)
             if (!extra.isDone) 'list:${task.index}',
         ],
@@ -781,11 +829,16 @@ abstract class TurnController extends ChangeNotifier {
 /// The coach's answer for the player's position at move [index]: shown,
 /// and used to grade the move made there.
 class _ShowTask {
-  _ShowTask(this.index, this.seat, this.handle, {required this.deep});
+  _ShowTask(this.index, this.seat, this.listed, {required this.deep});
 
   final int index;
   final int seat;
-  final JobHandle<Object?> handle;
+
+  /// The moves the answer must list, taken at the turn.
+  final Set<String> listed;
+
+  /// The coach job; null while it waits for prepare() to end.
+  JobHandle<Object?>? handle;
   final bool deep;
   CoachAnswer? answer;
   bool failed = false;
@@ -798,7 +851,7 @@ class _ShowTask {
   final extras = <JobHandle<Object?>>[];
 
   void cancel() {
-    handle.cancel();
+    handle?.cancel();
     for (final extra in extras) {
       extra.cancel();
     }

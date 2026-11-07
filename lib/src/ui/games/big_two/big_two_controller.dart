@@ -510,7 +510,7 @@ class BigTwoController extends TurnController {
   }
 
   /// Whether the player may act now.
-  bool get myTurn => started && !preparing && seatToAct == 0;
+  bool get myTurn => started && seatToAct == 0;
 
   /// The move the picked cards make, when it is legal now; else null.
   String? get selectedMove {

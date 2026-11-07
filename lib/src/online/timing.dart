@@ -12,6 +12,12 @@ abstract final class Playback {
   /// How long a bot seems to think before it acts.
   static const botThink = Duration(milliseconds: 650);
 
+  /// How much longer, after [botThink], a bot that plays from a solve waits
+  /// for it (the hand's copy to catch up with the table, and a GTO bot's
+  /// street after the flop). Past it the bot plays the best it has, which
+  /// keeps the hand on the solved lines: nobody waits long for a bot.
+  static const botBudget = Duration(seconds: 1);
+
   /// The pause after a hand starts, before antes and blinds.
   static const handStart = Duration(milliseconds: 250);
 
@@ -110,11 +116,11 @@ abstract final class OnlineTiming {
   static const backoffJitter = Duration(milliseconds: 250);
 
   /// Between hands: the least time to see the result, and how much longer
-  /// the server waits for devices still solving the next hand (more when
-  /// they give help).
+  /// the server waits for players' devices to show the last hand (each
+  /// says Ready once it has). Nothing waits for a solve: help, and the
+  /// host's GTO bots, play from what each device has solved by then.
   static const betweenHands = Duration(seconds: 3);
   static const readyWait = Duration(seconds: 3);
-  static const readyWaitWithHelp = Duration(seconds: 10);
 
   /// A device asks for a fresh copy of the hand at most this often.
   static const resyncGap = Duration(seconds: 2);

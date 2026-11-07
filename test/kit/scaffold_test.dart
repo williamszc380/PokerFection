@@ -490,7 +490,9 @@ void main() {
     await _close(tester, game);
   });
 
-  testWidgets("while the game prepares, its buttons and keys are greyed out and nobody's turn shows", (tester) async {
+  testWidgets("while the game prepares, its buttons and keys work and the player's turn shows; a thin bar runs", (
+    tester,
+  ) async {
     final game = _SlowStartNim(jobs: Jobs.inline(extra: nimJobs));
     unawaited(game.newGame());
     await tester.pump();
@@ -507,22 +509,20 @@ void main() {
       ),
       size: const Size(1280, 800),
     );
-    expect(find.text('Your turn'), findsNothing);
-    expect(find.text('Deal'), findsOneWidget, reason: 'greyed out, not hidden');
-    await tester.tap(find.text('Deal'), warnIfMissed: false);
-    await tester.sendKeyEvent(LogicalKeyboardKey.keyD);
-    await tester.pump();
-    expect(game.record.moves, isEmpty);
-    expect(played, 0);
-    game.ready.complete();
-    await tester.pump();
-    await tester.pump();
-    expect(find.text('Your turn'), findsOneWidget);
+    expect(game.preparing, isTrue);
+    expect(find.text('Your turn'), findsOneWidget, reason: 'nobody waits for prepare()');
+    expect(find.byType(LinearProgressIndicator), findsOneWidget, reason: 'a notice only');
+    // Not greyed out: a tap reaches the button.
     await tester.tap(find.text('Deal'));
     await tester.sendKeyEvent(LogicalKeyboardKey.keyD);
     await tester.pump();
-    expect(game.record.moves.first, '1', reason: 'then the bot answers');
-    expect(played, 1);
+    expect(game.record.moves.first, '1', reason: 'the button plays at once');
+    expect(played, 1, reason: 'and the keys work');
+    game.ready.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(game.preparing, isFalse);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
     await _close(tester, game);
   });
 }

@@ -57,8 +57,8 @@ class SpectatorCoach {
 /// the user only watches it (not dealt in), and if so whether as a
 /// spectator (no seat of theirs: they see the people's cards, and the
 /// coach) rather than from a seat (out of chips, or sitting out); and
-/// whether the host's device plays a GTO bot in it (it then solves the
-/// hand and says Ready, even while the host watches).
+/// whether the host's device plays a GTO bot in it (its session then
+/// follows the hand for the bot, even while the host watches).
 typedef _Lineup = ({
   List<int> roomSeats,
   List<SeatInfo> infos,
@@ -66,20 +66,6 @@ typedef _Lineup = ({
   bool watching,
   bool spectating,
   bool gtoBots,
-});
-
-/// A move the user made before GTO's answer for it was worked out (the
-/// table doesn't wait for it): scored once the answer comes. [choice] is
-/// the menu's choice played (drawn from [mix], if [drew]); [action] a
-/// raise of another amount, graded as [choice].
-typedef _Unscored = ({
-  int hand,
-  int turnId,
-  List<double> mix,
-  int choice,
-  bool drew,
-  PlayerAction? action,
-  bool oneAction,
 });
 
 /// Plays a table online. The server deals, checks every move and keeps the
@@ -102,10 +88,22 @@ typedef _Unscored = ({
 ///   GTO bots; it may fall behind while they solve, but never holds up the
 ///   table: the choices show at once, GTO's answer when it is ready.
 ///
+/// Nothing at the table waits for a solve, on any device. Each device says
+/// Ready as soon as it has shown the last hand, and the server deals then
+/// (3 s more at most: OnlineTiming.readyWait). Each hand's solves are
+/// claimed by its own SolveOwner, one solve at a time per device, the most
+/// urgent first; the next hand's solves start once its line-up is
+/// announced. The host's bots wait a moment for theirs ([_playBot]), then
+/// play the best they have, which keeps the hand on the solved lines for
+/// everyone's help. Every device solves for itself, from the cards it may
+/// see: nothing about solves is sent between devices.
+///
 /// With help on (the host picks it for the whole table), moves are sent as
 /// soon as they are chosen, and the score shows without holding the table.
-/// A pre-action the user picked while others acted is sent the moment their
-/// turn opens.
+/// Show GTO works at any time: pressed before GTO's answer has come, the
+/// answer is solved first and shows when it does, and the choices keep
+/// working meanwhile (the turn's clock runs as always). A pre-action the
+/// user picked while others acted is sent the moment their turn opens.
 ///
 /// Neither copy's cards are shown: the table only plays the server's
 /// events, with the user's own cards and the hands shown at the end. The
@@ -126,9 +124,10 @@ typedef _Unscored = ({
 /// host lets spectators: [_visible]), and the session follows the hand
 /// with nobody as the user ([follows]): for the coach ([coachOn], see
 /// [spectatorCoach]), worked out on this device from the cards it may
-/// show, and on the host's device for its GTO bots, which the host's
-/// device keeps playing by the solver (and saying Ready for) while the
-/// host watches, from a seat or as a spectator. Players out of chips, or
+/// show (its solves come first, as an answer the user looks at does), and
+/// on the host's device for its GTO bots, which the host's device keeps
+/// playing by the solver while the host watches, from a seat or as a
+/// spectator. Players out of chips, or
 /// who sit out, keep their places at the table ([TableViewState.others]),
 /// the user's at the bottom.
 /// Once the game is over ([gameOver]), nothing more is played here: the
@@ -191,7 +190,7 @@ class OnlineTableController extends TableController {
     if (_onScreen == on) return;
     _onScreen = on;
     if (_disposed) return;
-    _sessionJob(() async => session.coaching = coachOn && spectating && _onScreen);
+    _sessionJob(() async => _coaching(coachOn && spectating && _onScreen));
   }
 
   /// Each sound the table would play now (tests listen).
@@ -263,15 +262,21 @@ class OnlineTableController extends TableController {
   /// The session's copy went wrong in this hand: the bots use their rules.
   bool _sessionBroken = false;
 
+  /// The session's hand's solves (see SolveOwner): claimed while a bot
+  /// waits for its solve, while the user has Show GTO on, and while a
+  /// spectator's coach is on; finished once the hand is over on the table,
+  /// let go of when the next hand is dealt.
+  SolveOwner? _owner;
+
+  /// The spectator's coach's claim on the session's hand, while it is on.
+  SolveClaim? _coachClaim;
+
   /// The help in the hand on screen, and in the next one.
   HelpLevel _help, _nextHelp;
 
   /// GTO's answer for one of the user's turns (null: there is none), once
   /// worked out.
   ({int hand, int turnId, SpotStrategy? spot})? _answer;
-
-  /// The user's moves made before their answers came, oldest first.
-  final List<_Unscored> _unscored = [];
 
   /// A message for the user above their choices (or while waiting).
   OnlineNotice? notice;
@@ -386,10 +391,9 @@ class OnlineTableController extends TableController {
   static bool _followed(_Lineup lineup) => !lineup.watching || lineup.spectating || lineup.gtoBots;
 
   /// Whether the server waits for this device to be Ready for the hand of
-  /// [lineup]: it plays in it, or it is the host's with a GTO bot in it
-  /// (the bot's solve comes first; the server waits for it up to
-  /// OnlineTiming.readyWaitWithHelp).
-  static bool _readies(_Lineup lineup) => !lineup.watching || lineup.gtoBots;
+  /// [lineup]: it plays in it (only to show the last hand: nobody waits
+  /// for a solve, the host's GTO bots' included).
+  static bool _readies(_Lineup lineup) => !lineup.watching;
 
   /// The Coach chip starts off, for everyone: the best play isn't shown
   /// until the user asks for it (the chip, or the Coach button in the Game
@@ -402,8 +406,17 @@ class OnlineTableController extends TableController {
   void setCoach(bool on) {
     if (coachOn == on) return;
     coachOn = on;
-    _sessionJob(() async => session.coaching = on && spectating && _onScreen);
+    _sessionJob(() async => _coaching(on && spectating && _onScreen));
     _notify();
+  }
+
+  /// The session works out the spectator's coach ([on]) or not. Its answers
+  /// are looked at as soon as they come, so the hand's solves come first
+  /// while it is on, as for Show GTO (until the hand is over).
+  void _coaching(bool on) {
+    session.coaching = on;
+    _coachClaim?.end();
+    _coachClaim = on ? _owner?.claim(SolvePriority.shown) : null;
   }
 
   @override
@@ -417,11 +430,31 @@ class OnlineTableController extends TableController {
   bool get advanced => _help == HelpLevel.advanced;
 
   /// The user is choosing, with help on, and GTO's answer is still being
-  /// worked out (it joins the choices when ready).
-  bool get helpPending {
+  /// worked out on the session's copy (it joins the choices when ready).
+  @override
+  bool get answerPending {
     final turn = _myTurn, answer = _answer;
     if (!guessGto || turn == null || heroOptions == null) return false;
     return answer == null || answer.hand != _handNumber || answer.turnId != turn.turnId;
+  }
+
+  /// Show GTO's claim goes on the hand on screen's solves at once, not as a
+  /// session job, so it also lifts the solve the session is waiting for
+  /// (and the hand's, if the session hasn't dealt it yet).
+  @override
+  Iterable<SolveOwner> get _answerOwners => [
+    for (final owner in [?_owner, ?_nextOwner])
+      if (owner.hand == _handNumber) owner,
+  ];
+
+  /// Hand [hand] and those before it are over on the table: nobody plays
+  /// in them any more, so what made their solves urgent is over too (see
+  /// SolveOwner.finish), and what is left of them goes after the next
+  /// hand's game.
+  void _finishHandsTo(int hand) {
+    for (final owner in [?_owner, ?_nextOwner]) {
+      if (owner.hand <= hand) owner.finish();
+    }
   }
 
   /// The table [next] sets up, as this device sees it: the user in seat 0,
@@ -454,7 +487,7 @@ class OnlineTableController extends TableController {
       ],
       watching: watching,
       spectating: watching && client.isSpectator,
-      // The server counts the same bots (see Room: the host's Ready).
+      // Only the host's device plays the bots (and follows the hand for its GTO ones).
       gtoBots: host && infos.any((info) => info.kind == SeatKind.bot && info.style == 'gto'),
     );
   }
@@ -588,7 +621,8 @@ class OnlineTableController extends TableController {
   /// left, the host may have added or taken away a bot), with what stacks
   /// and what help. The session takes the line-up now, so solving can
   /// start; the table when the hand is dealt. The server deals once every
-  /// device is ready.
+  /// player's device is Ready: this one is at once, since the last hand is
+  /// shown by now (messages are played in order).
   void _onNext(NextHand m) {
     final lineup = _lineupOf(m, client, stackBb: rules.stackBb);
     // The next hand's messages use its seats.
@@ -596,6 +630,8 @@ class OnlineTableController extends TableController {
     _nextLineup = lineup;
     final stacks = seats.listToLocal(m.stacks), button = seats.toLocal(m.button);
     _nextHelp = m.help;
+    // Before the next hand's solves are asked for (as a session job).
+    _finishHandsTo(m.hand - 1);
     handOver = true;
     paused = false;
     nextHandAt = DateTime.now().add(Duration(milliseconds: m.maxWaitMs));
@@ -607,10 +643,10 @@ class OnlineTableController extends TableController {
         _seatSession(lineup);
         session.announced = (stacks: stacks, button: button);
         _helpFor(lineup, m.help);
-        _precomputeNext();
+        _solveAhead(m.hand);
       });
     }
-    if (_readies(lineup)) unawaited(_readyFor(m.hand, Duration(milliseconds: m.maxWaitMs)));
+    if (_readies(lineup)) _readyFor(m.hand);
     _notify();
   }
 
@@ -621,7 +657,34 @@ class OnlineTableController extends TableController {
   void _helpFor(_Lineup lineup, HelpLevel help) {
     session.guessGto = help != HelpLevel.none && (!lineup.watching || isHost);
     session.setAdvanced(help == HelpLevel.advanced);
-    session.coaching = lineup.spectating && coachOn && _onScreen;
+    _coaching(lineup.spectating && coachOn && _onScreen);
+  }
+
+  /// Starts on hand [hand]'s solves as soon as the session has taken its
+  /// line-up (between hands, while the last one's end shows): its whole
+  /// game, then the user's first decision if everyone folds to them. Nothing
+  /// waits for them: the hand is dealt when the players' devices have shown
+  /// the last one, and gets its answers when they are ready. A hand
+  /// announced again (another line-up) starts over: what only the old
+  /// line-up wanted is let go of.
+  void _solveAhead(int hand) {
+    final old = _nextOwner;
+    _nextOwner = null;
+    if (session.needsSolver) {
+      final owner = _nextOwner = SolveOwner(hand);
+      // Failures show up when the hand needs the solve; nothing to do here.
+      _quietly(_solutions.solve(session.upcomingSpec, owner: owner, priority: SolvePriority.nextHand));
+    }
+    if (old != null) _solutions.drop(old);
+    // A guess, with its own claim: never made more urgent (see _aheadOwner).
+    if (_aheadOwner case final oldAhead?) _solutions.drop(oldAhead);
+    _aheadOwner = null;
+    if (session.needsSolver) {
+      if (session.upcomingHeroSpec case final heroSpec?) {
+        final ahead = _aheadOwner = SolveOwner(hand);
+        _quietly(_solutions.solve(heroSpec, owner: ahead, priority: SolvePriority.ahead));
+      }
+    }
   }
 
   /// The session takes the next hand's [lineup] (players who stay keep
@@ -691,18 +754,10 @@ class OnlineTableController extends TableController {
     if (room != null) _onRoom(room);
   }
 
-  /// Tells the server this device is ready for hand [hand] (its last hand
-  /// is shown already): at once, or when solving is needed (help, or GTO
-  /// bots on the host's device), once the hand's whole preflop game is
-  /// solved. The server deals anyway after [cap].
-  Future<void> _readyFor(int hand, Duration cap) async {
-    final watch = Stopwatch()..start();
-    // The session knows the next hand's line-up and help once its jobs so far are done.
-    await _within(_sessionTail, cap);
-    if (session.needsSolver) {
-      // Too slow (or failed): help, and the GTO bots, come later in the hand.
-      await _within(_solutions.solve(session.upcomingSpec), cap - watch.elapsed);
-    }
+  /// Tells the server this device is ready for hand [hand]: it has shown
+  /// the last hand. Never later for a solve (help, and the host's GTO bots,
+  /// play from what is solved by then: see [_playBot]).
+  void _readyFor(int hand) {
     if (!_disposed && !ended) client.send(Ready(hand));
   }
 
@@ -723,13 +778,17 @@ class OnlineTableController extends TableController {
     _sentMove = null;
     outOfSync = false;
     _shownBatches = 1;
+    // Late Mistakes are listed for the hand on screen only.
+    _lateMistakes.clear();
     try {
       _mirror = _build(deal);
     } on MirrorMismatch catch (e) {
       _mirror = null;
       _lostSync(e);
     }
-    if (follows) _sessionJob(() => _sessionDeal(m.hand, deal));
+    _settleAheadOnline();
+    // A hand the session doesn't follow: what it solved for the last one is no longer wanted.
+    _sessionJob(follows ? () => _sessionDeal(m.hand, deal) : () async => _letGoOfOwner());
     handOver = false;
     nextHandAt = null;
     _clearHeroDecision();
@@ -740,17 +799,68 @@ class OnlineTableController extends TableController {
   }
 
   /// The whole preflop game of hand [hand] (the next for the session),
-  /// solved, if help or the GTO bots need it: waits for a solve still
-  /// running, so the help comes late rather than not at all, unless the
-  /// server deals another hand first. Null without it.
-  Future<PreflopAdvisor?> _blueprint(int hand) async {
+  /// solved, if help or the GTO bots need it, for [owner]: the session
+  /// waits for a solve still running (the table doesn't), so the help comes
+  /// late rather than not at all, unless the server deals another hand
+  /// first. Null without it. Meanwhile the host's bots keep the hand on its
+  /// solved lines without it (TableSession.decisionOn).
+  Future<PreflopAdvisor?> _blueprint(int hand, SolveOwner owner) async {
     if (!session.needsSolver) return null;
     final spec = session.upcomingSpec;
     final ready = _solutions.ready(spec);
     if (ready != null || _latest.$1 > hand) return ready;
     PreflopAdvisor? advisor;
-    await _beforeNextHand(_solutions.solve(spec).then((a) => advisor = a), hand);
+    await _beforeNextHand(
+      _solutions.solve(spec, owner: owner, priority: SolvePriority.bot).then((a) => advisor = a),
+      hand,
+    );
     return advisor;
+  }
+
+  /// The claim on solves of hand [hand], the one the session deals now:
+  /// the one its solves ahead of time were started with ([_solveAhead]), or
+  /// the hand's own when it is dealt again (a fresh copy after
+  /// reconnecting), else a new one. The hand before is let go of: online,
+  /// its answers still to come are dropped once the next hand is dealt.
+  /// A spectator's coach looks at its answers as they come: they come first.
+  SolveOwner _ownerFor(int hand) {
+    final last = _owner, next = _nextOwner;
+    final owner = last != null && last.hand == hand
+        ? last
+        : next != null && next.hand == hand
+        ? next
+        : SolveOwner(hand);
+    if (identical(owner, next)) _nextOwner = null;
+    if (!identical(last, owner)) _letGoOfOwner();
+    _owner = owner;
+    _coaching(session.coaching);
+    return owner;
+  }
+
+  /// The guess solved ahead of time for the user's first decision is let
+  /// go of once it can't be used in the hand on screen (see _settleAhead).
+  void _settleAheadOnline() {
+    final ahead = _aheadOwner;
+    if (ahead == null) return;
+    final mirror = _mirror;
+    if (mirror != null && ahead.hand == _handNumber) return _settleAhead(mirror);
+    if (ahead.hand > _handNumber) return;
+    _aheadOwner = null;
+    _solutions.drop(ahead);
+  }
+
+  /// The session's last hand gets nothing more solved: another is dealt.
+  void _letGoOfOwner() {
+    final last = _owner;
+    if (last == null) return;
+    _owner = null;
+    _solutions.drop(last);
+  }
+
+  /// Whether a GTO bot is still in the session's copy of hand [hand].
+  bool _gtoBotIn(int hand) {
+    final h = session.hand;
+    return h != null && h.handNumber == hand && session.hasGtoBotIn(h);
   }
 
   PokerHand _build(RemoteDeal deal) => deal.build(
@@ -761,12 +871,32 @@ class OnlineTableController extends TableController {
   );
 
   /// The session's copy of hand [hand], from [deal]: once its whole preflop
-  /// game is solved, if help or the GTO bots need it.
+  /// game is solved, if help or the GTO bots need it. Its solves are the
+  /// hand's own ([_ownerFor]): the user's subgames grade them (with help,
+  /// on the host's device, the bots' replies before the flop come from them
+  /// too), and the streets are solved only while someone needs them
+  /// (TableSession.streetNeeded).
   Future<void> _sessionDeal(int hand, RemoteDeal deal) async {
     _sessionBroken = false;
+    final owner = _ownerFor(hand);
     session.announced = (stacks: deal.stacks, button: deal.buttonSeat);
-    session.advisor = await _blueprint(hand);
-    final h = session.startHand(deal);
+    session.advisor = await _blueprint(hand, owner);
+    final h = session.startHandWith(
+      deal: deal,
+      subgames: (spec, ranges) => _solutions.solveSubgame(
+        spec,
+        ranges,
+        owner: owner,
+        priority: session.guessGto ? SolvePriority.grade : SolvePriority.bot,
+      ),
+      streets: (spec, ranges) => _solutions.solvePostflop(
+        spec,
+        ranges,
+        owner: owner,
+        priority: _gtoBotIn(hand) ? SolvePriority.bot : SolvePriority.grade,
+      ),
+      needed: session.streetNeeded,
+    );
     _sessionBatches = 1;
     await _track(hand);
     if (h.isOver) _finishSessionHand();
@@ -803,11 +933,13 @@ class OnlineTableController extends TableController {
     if (mirror != null) {
       try {
         applyBatch(mirror, batch);
+        if (mirror.isOver) _finishHandsTo(hand);
       } on MirrorMismatch catch (e) {
         _mirror = null;
         _lostSync(e);
       }
     }
+    _settleAheadOnline();
     final sent = _sentMove;
     if (sent != null && turnId != null && turnId >= sent.turnId) _sentMove = null;
     if (batch.firstOrNull case final ActionTaken first when isUserSeat(first.seat)) {
@@ -1139,10 +1271,7 @@ class OnlineTableController extends TableController {
       name: m.seat == mine ? null : m.name,
     );
     _toast(OnlineToast.note(note));
-    _sessionJob(() async {
-      final record = session.history.lastOrNull;
-      if (record != null && record.handNumber == m.hand) record.notes.add(note);
-    });
+    _sessionJob(() async => _recordOf(m.hand)?.notes.add(note));
   }
 
   void _onStatus() {
@@ -1184,9 +1313,9 @@ class OnlineTableController extends TableController {
   }
 
   /// The solve the player in [seat] needs at their turn in hand [hand], if
-  /// it is still running on the session's copy (as in [_waitForAnswers]):
-  /// before the flop, the user's subgame; after it, the street. Null if
-  /// there is nothing to wait for.
+  /// it is still being worked out on the session's copy: before the flop,
+  /// the user's subgame (the bots' replies to the user come from it too);
+  /// after it, the street. Null if there is nothing to wait for.
   Future<void>? _answersFor(int seat, int hand) {
     final h = session.hand;
     if (h == null || h.handNumber != hand || h.toAct != seat) return null;
@@ -1203,22 +1332,19 @@ class OnlineTableController extends TableController {
     return Future.any([future.then((_) => true, onError: (Object _) => false), _dealt.future.then((_) => false)]);
   }
 
-  /// Whether [future] completes within [limit].
-  static Future<bool> _within(Future<void> future, Duration limit) =>
-      future.timeout(limit.isNegative ? Duration.zero : limit).then((_) => true, onError: (Object _) => false);
-
   // ---------------------------------------------------------------------------
   // Help
   // ---------------------------------------------------------------------------
 
   /// Works out GTO's answer for the user's [turn] on the session's copy of
   /// the hand, once it has caught up and solved what it needs (the choices
-  /// already show).
+  /// already show), or why there is none.
   void _answerFor(Turn turn) {
     final hand = _handNumber;
     _sessionJob(() async {
       final h = session.hand;
       SpotStrategy? spot;
+      NoAnswer? none;
       if (!_sessionBroken &&
           session.guessGto &&
           h != null &&
@@ -1226,104 +1352,57 @@ class OnlineTableController extends TableController {
           h.toAct == TableSession.heroSeat &&
           !h.isOver) {
         final wait = _answersFor(TableSession.heroSeat, hand);
-        if (wait == null || await _beforeNextHand(wait, hand)) spot = session.heroSpot();
+        final solved = wait == null || await _beforeNextHand(wait, hand);
+        if (solved) spot = session.heroSpot();
+        if (spot == null) none = _whyNone(h, failed: !solved);
       }
-      _answerCame(hand, turn.turnId, spot);
+      final decision = (hand: hand, turnId: turn.turnId, players: session.players, styles: session.styles);
+      _answerCame(decision, (spot: spot, none: none), h);
     });
   }
 
-  /// GTO's answer (or that there is none) for the user's turn [turnId] of
-  /// hand [hand], on the session's copy, which is at that turn. It joins
-  /// the choices if they still show; a move already made with them is
-  /// scored now.
-  void _answerCame(int hand, int turnId, SpotStrategy? spot) {
-    _answer = (hand: hand, turnId: turnId, spot: spot);
-    final turn = _myTurn;
-    if (turn != null && turn.turnId == turnId && hand == _handNumber && heroOptions != null) {
-      if (spot != null) {
-        heroSpot = spot;
-        heroMenu = spot.actions;
-      }
-    } else {
-      final i = _unscored.indexWhere((played) => played.hand == hand && played.turnId == turnId);
-      if (i >= 0) {
-        final played = _unscored.removeAt(i);
-        if (spot != null) _scoreLate(played, spot);
-      }
-    }
-    // Older ones won't get an answer any more (the session caught up without).
-    _unscored.removeWhere((played) => played.hand < hand);
-    _notify();
+  /// Why GTO has no answer for the user at [h] (the session's copy): the
+  /// solve it waited for [failed], or the hand's whole game couldn't be
+  /// solved, or the trackers say (more than two players after the flop, a
+  /// move off the solved lines). Null when no reason is known, or the next
+  /// hand was dealt first (then nobody sees it).
+  NoAnswer? _whyNone(PokerHand h, {required bool failed}) {
+    if (_latest.$1 > h.handNumber) return null;
+    if (failed) return NoAnswer.solveFailed;
+    final pre = session.preflop, post = session.postflop;
+    if (pre == null) return session.needsSolver ? NoAnswer.solveFailed : null;
+    return h.street == Street.preflop ? pre.unavailable : (post?.unavailable ?? pre.unavailable);
   }
+
+  /// GTO's answer (or that there is none) for the user's decision [d],
+  /// on the session's copy, which is at that turn: as on the device (see
+  /// TableController._answerCame). Older moves won't get an answer any more
+  /// (the session caught up without).
+  @override
+  void _answerCame(_Decision d, GtoAnswer a, PokerHand? at, {PostflopTracker? postflop}) {
+    _answer = (hand: d.hand, turnId: d.turnId, spot: a.spot);
+    _unscored.removeWhere((played) => played.hand < d.hand);
+    super._answerCame(d, a, at, postflop: postflop);
+  }
+
+  /// The user's choices at turn [d] still show.
+  @override
+  bool _showing(_Decision d) {
+    final turn = _myTurn;
+    return turn != null && turn.turnId == d.turnId && d.hand == _handNumber && heroOptions != null;
+  }
+
+  @override
+  int get _tableHand => _handNumber;
 
   void _dropUnscored(int hand, int turnId) =>
       _unscored.removeWhere((played) => played.hand == hand && played.turnId == turnId);
 
-  /// Scores [played], a move made before its answer [spot] came, and
-  /// records it. It shows (without holding the table) unless the user is
-  /// choosing again already.
-  void _scoreLate(_Unscored played, SpotStrategy spot) {
-    final h = session.hand!, record = session.history.lastOrNull;
-    final actions = spot.actions;
-    if (record == null || record.handNumber != played.hand || played.mix.length != actions.length) return;
-    final List<double> mix;
-    final int? choice;
-    if (played.oneAction) {
-      choice = _solvedChoice(actions, played.choice, played.action);
-      if (choice == null) return;
-      mix = [for (var i = 0; i < actions.length; i++) i == choice ? 1.0 : 0.0];
-    } else {
-      // Shares on choices GTO hasn't solved drop out.
-      final kept = [for (final (i, share) in played.mix.indexed) actions[i].available ? share : 0.0];
-      final total = kept.fold(0.0, (a, b) => a + b);
-      if (total <= 0) return;
-      mix = [for (final share in kept) share / total];
-      choice = actions[played.choice].available ? played.choice : null;
-    }
-    final score = scoreDecision(spot, mix);
-    record.decisions.add(
-      DecisionRecord(
-        street: h.street,
-        board: h.board,
-        spot: spot,
-        mix: List.unmodifiable(mix),
-        score: score,
-        oneAction: played.oneAction,
-        turnId: played.turnId,
-      )..played = choice,
-    );
-    if (heroOptions != null || _quietGrade(score, oneAction: played.oneAction)) return;
-    heroSpot = spot;
-    heroMix = List.unmodifiable(mix);
-    heroScore = score;
-    heroPlay = choice;
-    heroDrew = played.drew;
-    heroAction = played.action;
-  }
-
-  /// [choice] of [actions] (the same menu, now with GTO's answer) if GTO
-  /// has solved it; for a raise it hasn't, the nearest size it has (for a
-  /// raise of another amount, [action], nearest to that). Null if none.
-  static int? _solvedChoice(List<SpotAction> actions, int choice, PlayerAction? action) {
-    final chosen = actions[choice];
-    if (chosen.available) return choice;
-    if (chosen.kind != SpotActionKind.raise && chosen.kind != SpotActionKind.allIn) return null;
-    final to = action?.amount ?? chosen.amount;
-    int? best;
-    var distance = double.infinity;
-    for (final (i, a) in actions.indexed) {
-      if (!a.available || (a.kind != SpotActionKind.raise && a.kind != SpotActionKind.allIn)) continue;
-      final d = (log(a.amount) - log(to)).abs();
-      if (d < distance) (distance, best) = (d, i);
-    }
-    return best;
-  }
-
   /// The server checked or folded for the user at turn [turnId] (their
   /// time ran out first): a decision recorded for it says so.
   void _correctRecord(int hand, int turnId, ActionTaken played) {
-    final record = session.history.lastOrNull;
-    if (record == null || record.handNumber != hand) return;
+    final record = _recordOf(hand);
+    if (record == null) return;
     final kind = switch (played.kind) {
       ActionKind.fold => SpotActionKind.fold,
       ActionKind.check => SpotActionKind.check,
@@ -1341,38 +1420,91 @@ class OnlineTableController extends TableController {
   // The host's bots
   // ---------------------------------------------------------------------------
 
-  /// Plays the bot in [seat] at [turn] (on the host's device). A GTO bot
-  /// waits for the session's copy of the hand to catch up and its solve to
-  /// finish, for a few seconds at most; otherwise, or for the other styles,
-  /// the bot plays by its rules on the table's copy.
+  /// Plays the bot in [seat] at [turn] (on the host's device), in about a
+  /// person's time however slow this device is. After its think pause, a
+  /// bot that plays from a solve (a GTO bot; before the flop with help on,
+  /// any bot) waits a moment more ([botBudget]) for the session's copy of
+  /// the hand to catch up, and for the solve its move comes from (its
+  /// hand's solves come first meanwhile). Then it plays the best it has:
+  /// on the session's copy when that is at this turn, else on the table's
+  /// (TableSession.decisionOn). Either way its move keeps the hand on the
+  /// solved lines, so every player's help still has its answers.
   Future<void> _playBot(Turn turn, int seat) async {
     final hand = _handNumber;
-    final watch = Stopwatch()..start();
+    bool gone() => _disposed || ended || _latest != (hand, turn.turnId);
     await Future<void>.delayed(Playback.botThink);
-    final limit = turn.ms ?? OnlineTiming.botLimit.inMilliseconds;
-    final cap = Duration(milliseconds: max(0, min(6000, limit - 3000)));
-    var caughtUp = await _within(_sessionTail, cap - watch.elapsed);
-    if (caughtUp) caughtUp = await _within(_answersFor(seat, hand) ?? Future.value(), cap - watch.elapsed);
-    if (_disposed || ended || _latest != (hand, turn.turnId)) return;
+    if (gone()) return;
+    final style = _botStyle(seat);
+    final mirror = _mirror;
+    if (mirror != null && mirror.toAct == seat && session.playsFromSolve(mirror, seat, style: style)) {
+      final waiting = switch (_owner) {
+        final owner? when owner.hand == hand => owner.claim(SolvePriority.bot),
+        _ => null,
+      };
+      try {
+        final ready = _readyToPlay(seat, hand);
+        final budget = botBudget;
+        if (budget == null) {
+          await ready.then((_) {}, onError: (Object _) {});
+        } else {
+          await _within(ready, budget);
+        }
+      } finally {
+        // It has waited: its move comes now, from whatever is ready.
+        waiting?.end();
+      }
+      if (gone()) return;
+    }
     PlayerAction? move;
-    final h = session.hand;
-    if (caughtUp && !_sessionBroken && h != null && h.handNumber == hand && h.toAct == seat && !h.isOver) {
+    if (_sessionAt(hand, seat)) {
       try {
         move = session.botDecision();
       } catch (e) {
         debugPrint('Online table: bot decision failed: $e');
       }
     }
-    final mirror = _mirror;
     if (move == null) {
       // The server checks or folds for it when time runs out.
+      final mirror = _mirror;
       if (mirror == null || mirror.toAct != seat) return;
-      // A random style is the session's secret, once it has this hand's players.
-      final secret = listEquals(_sessionRoomSeats, _viewRoomSeats) ? session.styles[seat] : null;
-      final style = view.seats[seat].info.style ?? secret ?? BotStyle.tag;
-      move = Bot(style, _random).decide(mirror, seat);
+      try {
+        move = session.decisionOn(mirror, seat, style: style);
+      } catch (e) {
+        debugPrint('Online table: bot decision failed: $e');
+        move = Bot(style, _random).decide(mirror, seat);
+      }
     }
     client.send(BotAct(hand: hand, turnId: turn.turnId, seat: seats.toServer(seat), action: move));
+  }
+
+  /// The style the bot in [seat] of the hand on screen plays: as the
+  /// server sent it, or a random one's, which only the session knows (once
+  /// it has this hand's players).
+  BotStyle _botStyle(int seat) {
+    final secret = listEquals(_sessionRoomSeats, _viewRoomSeats) && seat < session.styles.length
+        ? session.styles[seat]
+        : null;
+    return view.seats[seat].info.style ?? secret ?? BotStyle.tag;
+  }
+
+  /// Completes once the session's copy of hand [hand] has caught up with
+  /// the jobs queued so far, and the solve the player in [seat] needs at
+  /// their turn is done (see [_answersFor]).
+  Future<void> _readyToPlay(int seat, int hand) async {
+    await _sessionTail;
+    await (_answersFor(seat, hand) ?? Future<void>.value());
+  }
+
+  /// Whether the session's copy stands where the table does in hand
+  /// [hand], at [seat]'s turn.
+  bool _sessionAt(int hand, int seat) {
+    final h = session.hand;
+    return !_sessionBroken &&
+        h != null &&
+        h.handNumber == hand &&
+        _sessionBatches == _shownBatches &&
+        h.toAct == seat &&
+        !h.isOver;
   }
 
   // ---------------------------------------------------------------------------
@@ -1425,7 +1557,7 @@ class OnlineTableController extends TableController {
     if (turn == null || heroOptions == null || menu == null || heroScore != null || ended) return;
     if (heroSpot != null) {
       // A move the server refused was recorded already: this one counts instead.
-      session.history.lastOrNull?.decisions.removeWhere((d) => d.turnId == turn.turnId);
+      _recordOf(_handNumber)?.decisions.removeWhere((d) => d.turnId == turn.turnId);
       super.submitMix(mix, choice: choice, oneAction: oneAction);
     }
     final play = heroPlay ?? choice ?? _drawFrom(menu, mix);
@@ -1433,6 +1565,8 @@ class OnlineTableController extends TableController {
       _unscored.add((
         hand: _handNumber,
         turnId: turn.turnId,
+        players: List.of(session.players),
+        styles: List.of(session.styles),
         mix: List.unmodifiable(mix),
         choice: play,
         drew: choice == null,
@@ -1449,18 +1583,8 @@ class OnlineTableController extends TableController {
     }
   }
 
-  /// As in simple training on the device, a good play just goes on (its
-  /// score joins the recent ones); GTO's answer shows after a mistake or a
-  /// blunder, and always in advanced training.
-  static bool _quietGrade(DecisionScore score, {required bool oneAction}) =>
-      oneAction && score.grade.index < DecisionGrade.mistake.index;
-
   @override
   int? get _recordTurnId => _myTurn?.turnId;
-
-  /// A move made before GTO's answer comes is graded once it does.
-  @override
-  bool get _gradesPlay => heroSpot != null || helpPending;
 
   /// The score shows without holding the table: OK puts it away.
   @override
@@ -1545,8 +1669,9 @@ class OnlineTableController extends TableController {
       // No whole game solved for this hand (the coach was off when it was dealt, or the solve failed).
       none = session.preflop == null ? null : NoAnswer.leftSolvedLines;
     } else if (session.postflop case final tracker?) {
-      none = tracker.unavailable;
-      thinking = none == null;
+      // A street nobody needed isn't solved (the coach was off): no reason to give.
+      none = tracker.unavailable == NoAnswer.notNeeded ? null : tracker.unavailable;
+      thinking = tracker.unavailable == null;
     } else {
       none = null;
     }
@@ -1675,6 +1800,8 @@ class OnlineTableController extends TableController {
 
   @override
   void dispose() {
+    // Solves not started yet for this table won't be needed.
+    _letGoOfOwner();
     unawaited(_statusChanges.cancel());
     unawaited(_chatLines.cancel());
     unawaited(_toasts.close());

@@ -210,13 +210,34 @@ class PreflopTerminal extends PreflopNode {
 /// of [PreflopSpec.history]).
 class PreflopTree {
   PreflopTree(this.spec, {this.settings = const PreflopSettings()}) {
-    final start = _State.start(spec);
-    for (final action in spec.history) {
-      final player = start.nextToAct();
-      if (player == null) throw ArgumentError('The history goes past the end of the betting');
-      start.apply(player, action);
-    }
+    final start = _replay(spec);
+    if (start == null) throw ArgumentError('The history goes past the end of the betting');
     root = _build(start, root: true);
+  }
+
+  /// The bots' menu for whoever acts after [spec]'s history: exactly the
+  /// actions every solved tree (the whole game, or a subgame of the user's)
+  /// has at that point, as long as that player isn't the user at the start
+  /// of their own subgame ([spec]'s hero doesn't matter here). Empty when
+  /// nobody acts there. It only replays the history, so it costs next to
+  /// nothing: a bot with no solved strategy yet plays a move from this menu
+  /// (see `fitToMenu`) and keeps the hand on the lines its solves will have.
+  static List<PreflopAction> botMenuAt(PreflopSpec spec, {PreflopSettings settings = const PreflopSettings()}) {
+    final s = _replay(spec);
+    final player = s != null && s.liveCount > 1 ? s.nextToAct() : null;
+    if (player == null) return const [];
+    return List.unmodifiable(_optionsFor(spec, settings, s!, player, fullMenu: false));
+  }
+
+  /// The betting after [spec]'s history; null if it goes past the end.
+  static _State? _replay(PreflopSpec spec) {
+    final s = _State.start(spec);
+    for (final action in spec.history) {
+      final player = s.nextToAct();
+      if (player == null) return null;
+      s.apply(player, action);
+    }
+    return s;
   }
 
   final PreflopSpec spec;
@@ -244,7 +265,14 @@ class PreflopTree {
     return node;
   }
 
-  List<PreflopAction> _options(_State s, int p, {required bool fullMenu}) {
+  List<PreflopAction> _options(_State s, int p, {required bool fullMenu}) =>
+      _optionsFor(spec, settings, s, p, fullMenu: fullMenu);
+
+  /// [p]'s choices in state [s]: the whole menu ([fullMenu], the user at the
+  /// start of their subgame) or the bots' menu. Static, so that building a
+  /// tree and [botMenuAt] share it.
+  static List<PreflopAction> _optionsFor(PreflopSpec spec, PreflopSettings settings, _State s, int p,
+      {required bool fullMenu}) {
     final bb = spec.bigBlind;
     final toCall = s.currentBet - s.bet[p];
     final allInTo = s.bet[p] + s.remaining(p);

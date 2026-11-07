@@ -158,7 +158,7 @@ void main() {
     await _end(tester, server, rooms);
   });
 
-  testWidgets("the host spectating with GTO bots (one in seat 0) and a guest: the deal waits for the host's solve; "
+  testWidgets("the host spectating with GTO bots (one in seat 0) and a guest: the deal doesn't wait for the host's solve; "
       "no action buttons on the host's screen; with the switch off, a bot's turn shows \"—\" and no bot card face "
       "up; the guest's cards show and the coach answers for them", (tester) async {
     final server = TestServer();
@@ -175,19 +175,16 @@ void main() {
     final own = await _host(tester, server, rooms, bots: const {0: 'gto', 1: 'gto'});
     final cy = (await _players(tester, server, own.room!.code, ['Cy'], think: const Duration(seconds: 3))).single;
     final link = server.links.first;
-    int? readyAt, dealtAt;
-    void note() {
-      readyAt ??= link.sent.any((m) => m.contains('"t":"ready"')) ? server.clock.nowMs : null;
-      dealtAt ??= cy.seen.whereType<HandDealt>().isNotEmpty ? server.clock.nowMs : null;
-    }
-
+    int? dealtAt;
     await _tap(tester, find.byKey(const ValueKey('start')));
+    final started = server.clock.nowMs;
     await server.until(tester, () {
-      note();
+      dealtAt ??= cy.seen.whereType<HandDealt>().isNotEmpty ? server.clock.nowMs : null;
       return dealtAt != null;
     }, 'the deal');
-    expect(readyAt, isNotNull);
-    expect(dealtAt!, greaterThanOrEqualTo(readyAt!), reason: "the first hand has no wait of its own: it waited for the host's Ready");
+    // The first hand has no wait of its own, and the host only watches: dealt once Cy is Ready, solved or not.
+    expect(dealtAt! - started, lessThan(1000), reason: "the host's solve takes 2 s");
+    expect(link.sent.where((m) => m.contains('"t":"ready"')), isEmpty);
     await _settle(tester, server);
     expect(_atTable(), isTrue);
     final table = rooms.table!;

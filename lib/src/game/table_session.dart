@@ -442,8 +442,23 @@ class TableSession {
   /// RemoteDeal), and this session follows a mirror of it: a hand still
   /// running is dropped (the device fell behind, or reconnected), and the
   /// same hand dealt again (a fresh copy after reconnecting) keeps its
-  /// record and scored decisions.
-  PokerHand startHand([RemoteDeal? deal]) {
+  /// record and scored decisions. The session follows the hand for GTO
+  /// answers itself, with its own solvers (see [startHandWith]).
+  PokerHand startHand([RemoteDeal? deal]) => startHandWith(deal: deal);
+
+  /// [startHand], with a choice of how the hand is followed for GTO answers.
+  /// With [track], the session makes the hand's trackers (see
+  /// [trackersFor]: [subgames] and [streets] stand in for the session's
+  /// own solvers in this hand, and [needed] says which streets to solve).
+  /// Without, it makes none: on the device, a hand follower does, behind
+  /// the table, and hands them over with [useTrackers].
+  PokerHand startHandWith({
+    RemoteDeal? deal,
+    bool track = true,
+    PreflopSubgameSolve? subgames,
+    PostflopSolve? streets,
+    bool Function(PokerHand hand)? needed,
+  }) {
     final old = hand;
     // The user's record of the same hand: a fresh copy of it (with no user
     // at the table there is none).
@@ -502,38 +517,97 @@ class TableSession {
         advanced: advanced,
       ));
     }
-    final blueprint = currentAdvisor, subgames = solveSubgame, streets = solvePostflop;
-    final tracker = preflop = needsSolver && blueprint != null && subgames != null
-        ? PreflopTracker(
-            blueprint: blueprint,
-            solveSubgame: subgames,
+    final blueprint = currentAdvisor;
+    final trackers = track && needsSolver && blueprint != null
+        ? trackersFor(h, blueprint, subgames: subgames, streets: streets, needed: needed)
+        : (preflop: null, postflop: null);
+    useTrackers(trackers.preflop, trackers.postflop);
+    return h;
+  }
+
+  /// The trackers that follow [h] (this session's hand, or a copy of it
+  /// with the same deal) for GTO answers: the bots' strategies come from
+  /// [blueprint], the hand's solved whole game, and the user's subgames and
+  /// the streets from [subgames] and [streets] (by default this session's
+  /// solvers). [needed] says whether a street is worth solving (see
+  /// [streetNeeded]); null solves every one. None when [blueprint] isn't
+  /// [h]'s game, or there is no solver for subgames; no postflop tracker
+  /// without one for streets.
+  ({PreflopTracker? preflop, PostflopTracker? postflop}) trackersFor(
+    PokerHand h,
+    PreflopAdvisor blueprint, {
+    PreflopSubgameSolve? subgames,
+    PostflopSolve? streets,
+    bool Function(PokerHand hand)? needed,
+  }) {
+    final solveSubgames = subgames ?? solveSubgame, solveStreets = streets ?? solvePostflop;
+    if (solveSubgames == null || blueprint.tree.spec != specOf(h)) return (preflop: null, postflop: null);
+    final pre = PreflopTracker(
+      blueprint: blueprint,
+      solveSubgame: solveSubgames,
+      heroSeat: hero,
+      handNumber: h.handNumber,
+    );
+    final post = solveStreets == null
+        ? null
+        : PostflopTracker(
+            preflop: pre,
+            solve: solveStreets,
+            bigBlind: h.bigBlind,
+            raiseRule: h.raiseRule,
             heroSeat: hero,
-          )
-        : null;
-    postflop = tracker != null && streets != null
-        ? PostflopTracker(
-            preflop: tracker,
-            solve: streets,
-            bigBlind: TableConfig.bigBlind,
-            raiseRule: config.raiseRule,
-            heroSeat: hero,
-          )
-        : null;
+            needed: needed,
+          );
+    return (preflop: pre, postflop: post);
+  }
+
+  /// Follows the current hand with [preflop] and [postflop] (on the device,
+  /// its follower's, once the hand's whole game is solved): the range
+  /// sheet, the notices and the answers read them.
+  void useTrackers(PreflopTracker? preflop, PostflopTracker? postflop) {
+    this.preflop = preflop;
+    this.postflop = postflop;
+    _heroPreflopTicket++;
     _heroPreflop = null;
     _heroPreflopDone = true;
-    return h;
+  }
+
+  /// The whole preflop game [h] is: its starting stacks, button, blinds,
+  /// ante and raise rule (the key of its blueprint).
+  PreflopSpec specOf(PokerHand h) => PreflopAdvisor.specFor(
+        stacksBySeat: [for (var s = 0; s < h.playerCount; s++) h.startingStackOf(s)],
+        buttonSeat: h.buttonSeat,
+        smallBlind: h.smallBlind,
+        bigBlind: h.bigBlind,
+        ante: h.ante,
+        raiseRule: h.raiseRule,
+      );
+
+  /// Whether the trackers follow [h]: answers and moves read from them
+  /// belong to that hand only.
+  bool _tracks(PokerHand h) {
+    final tracker = preflop;
+    return tracker != null && (tracker.handNumber ?? hand?.handNumber) == h.handNumber;
+  }
+
+  /// Whether anyone needs [h]'s next street solved: a GTO bot still in it,
+  /// the user still in it in Guess the GTO mode (to be graded), or, with no
+  /// user at the table, a spectator's coach.
+  bool streetNeeded(PokerHand h) =>
+      hasGtoBotIn(h) || (hero < 0 && coaching) || (guessGto && hero >= 0 && !h.isFolded(hero));
+
+  /// Whether a GTO bot is still in [h].
+  bool hasGtoBotIn(PokerHand h) {
+    for (var s = 0; s < h.playerCount && s < styles.length; s++) {
+      if (styles[s] == BotStyle.gto && !h.isFolded(s)) return true;
+    }
+    return false;
   }
 
   /// Stops following the current hand for answers (online, to catch up
   /// with the server quickly when the next hand is already dealt): no
   /// more solving, and no GTO answers or ranges in it.
-  void detachTrackers() {
-    preflop = null;
-    postflop = null;
-    _heroPreflopTicket++;
-    _heroPreflop = null;
-    _heroPreflopDone = true;
-  }
+  void detachTrackers() => useTrackers(null, null);
 
   /// Call after every action (and when the hand starts): on the user's
   /// turn before the flop, starts solving their subgame; when a street
@@ -592,14 +666,21 @@ class TableSession {
   PreflopAdvisor? get currentAdvisor {
     final h = hand, a = advisor;
     if (h == null || a == null) return null;
-    final spec = _spec([for (var s = 0; s < h.playerCount; s++) h.startingStackOf(s)], h.buttonSeat);
-    return a.tree.spec == spec ? a : null;
+    return a.tree.spec == specOf(h) ? a : null;
   }
 
   /// The GTO answer for the user's current decision (Guess the GTO mode).
   SpotStrategy? heroSpot() {
     final h = hand;
-    if (!guessGto || h == null || hero < 0 || h.toAct != hero) return null;
+    return h == null ? null : spotAt(h);
+  }
+
+  /// The GTO answer for the user's decision [h] is at (Guess the GTO mode):
+  /// the current hand, or a copy of it that the trackers follow (on the
+  /// device, its follower, standing at a decision played already). Null
+  /// until it is solved, or when it isn't the user's turn in [h].
+  SpotStrategy? spotAt(PokerHand h) {
+    if (!guessGto || hero < 0 || h.toAct != hero || !_tracks(h)) return null;
     return h.street == Street.preflop ? preflop?.spotFor(h) : postflop?.spotFor(h);
   }
 
@@ -621,22 +702,65 @@ class TableSession {
   bool get botPlaysGto {
     final h = hand;
     if (h == null || h.toAct == null) return false;
-    return styles[h.toAct!] == BotStyle.gto || (guessGto && h.street == Street.preflop);
+    return playsFromSolve(h, h.toAct!);
+  }
+
+  /// Whether the bot in [seat] plays from a solve in [on] right now (see
+  /// [botPlaysGto]; [style] as in [decisionOn]): the bots that may be worth
+  /// a short wait for theirs before [decisionOn] falls back.
+  bool playsFromSolve(PokerHand on, int seat, {BotStyle? style}) {
+    final playing = style ?? (seat < styles.length ? styles[seat] : null);
+    return playing == BotStyle.gto || (guessGto && on.street == Street.preflop && playing != null);
   }
 
   /// Asks the bot in the seat to act to make its decision.
   PlayerAction botDecision() {
     final h = hand!;
-    final seat = h.toAct!;
-    final bot = _bots[seat];
+    return decisionOn(h, h.toAct!);
+  }
+
+  /// The move of the bot in [seat], to act in [on] (the current hand, or
+  /// online, on the host, the table's copy of it when this session is
+  /// behind), at once: it never waits for a solve. [style] is the bot's
+  /// style when this session's seats may not be [on]'s (online); by
+  /// default the session's own bot plays.
+  ///
+  /// It plays the best thing it has, and every choice keeps the hand on
+  /// the solved lines, so a move made without its solve never stops a
+  /// later decision from being answered:
+  ///  1. before the flop, a bot that plays GTO there (see [botPlaysGto]):
+  ///     a move drawn from the hand's solves when the trackers follow
+  ///     [on] (the user's latest subgame solved so far, or else the whole
+  ///     game), or else its own move. Either way, fitted to the bots' menu
+  ///     at that point (see `fitToMenu`): the actions every solve of the
+  ///     hand has there, or will have once it is done;
+  ///  2. before the flop, any other bot: its own move, as always;
+  ///  3. after the flop, a GTO bot: a move drawn from the street's solve,
+  ///     once it is done and the trackers follow [on];
+  ///  4. otherwise its own move, its bet moved to the nearest size the
+  ///     street's solve has, or will have once it is done (see
+  ///     PostflopTracker.snap): a raise the street has no room for would
+  ///     take the hand off the lines. With no tracker for [on] yet, the
+  ///     sizes come from the hand alone, whenever solving is needed.
+  PlayerAction decisionOn(PokerHand on, int seat, {BotStyle? style}) {
+    if (on.toAct != seat) throw StateError('Seat $seat is not to act');
+    final bot = style != null ? Bot(style, _random) : (seat < _bots.length ? _bots[seat] : null);
     if (bot == null) throw StateError(seat == hero ? "It is the user's turn" : 'Seat $seat is played elsewhere');
-    assert(h.knows(seat), 'A bot needs to know its cards');
-    if (botPlaysGto) {
-      final move = h.street == Street.preflop ? preflop?.sample(h, _random) : postflop?.sample(h, _random);
-      if (move != null) return move;
+    assert(on.knows(seat), 'A bot needs to know its cards');
+    final tracked = _tracks(on), gtoBot = bot.style == BotStyle.gto;
+    if (on.street == Street.preflop) {
+      if (!playsFromSolve(on, seat, style: bot.style)) return bot.decide(on, seat);
+      final move = (tracked ? preflop?.sample(on, _random) : null) ?? bot.decide(on, seat);
+      return fitToMenu(move, PreflopTree.botMenuAt(PreflopTracker.specAt(on)), on.legalActions());
     }
-    final move = bot.decide(h, seat);
+    if (gtoBot && tracked) {
+      if (postflop?.sample(on, _random) case final move?) return move;
+    }
+    final move = bot.decide(on, seat);
     // Keep the hand on the solved lines: use the nearest size the solver has.
-    return h.street == Street.preflop ? move : (postflop?.snap(h, move) ?? move);
+    if (tracked) return postflop?.snap(on, move) ?? move;
+    return needsSolver
+        ? PostflopTracker.snapToBetting(on, move, heroSeat: hero, bigBlind: on.bigBlind, raiseRule: on.raiseRule)
+        : move;
   }
 }

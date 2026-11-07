@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pokerfection/main.dart';
@@ -129,6 +131,32 @@ void main() {
       ].map((t) => t.section),
       everyElement(GlossarySection.online),
     );
+  });
+
+  test("play doesn't wait for GTO's answer: \"Solving…\" with its glossary entry, late grades by street, "
+      'and no "Solving… 37%" before a hand', () {
+    expect(
+      [for (final l in AppLanguage.values) S.forLanguage(l).solvingDecision],
+      ['Solving…', 'Resolviendo…', '计算中…'],
+    );
+    expect(GlossaryTerm.solving.section, GlossarySection.scoring);
+    expect(GlossaryTerm.values.indexOf(GlossaryTerm.solving), GlossaryTerm.values.indexOf(GlossaryTerm.grades) + 1);
+    for (final l in AppLanguage.values) {
+      final s = S.forLanguage(l);
+      expect(s.term(GlossaryTerm.solving), s.solvingDecision);
+      expect(s.definition(GlossaryTerm.solving), contains(s.showGto), reason: '${l.label}: Show GTO shows it when it comes');
+    }
+    expect(
+      [for (final l in AppLanguage.values) S.forLanguage(l).lateGrade(DecisionGrade.mistake, Street.flop)],
+      ['Mistake on the flop', 'Error en el flop', '翻牌：失误'],
+    );
+    expect(
+      [for (final street in Street.values) S.forLanguage(AppLanguage.english).lateGrade(DecisionGrade.blunder, street)],
+      ['Blunder preflop', 'Blunder on the flop', 'Blunder on the turn', 'Blunder on the river'],
+    );
+    // The hand never waits for its whole game to be solved any more.
+    final strings = File('lib/src/l10n/strings.dart').readAsStringSync();
+    expect(strings, isNot(contains('solvingTable')));
   });
 
   testWidgets('the language button switches the whole app', (tester) async {

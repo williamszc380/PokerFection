@@ -177,7 +177,7 @@ class LandlordButtons extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!controller.started) return const SizedBox(height: 48);
     final game = controller.game;
-    // Not while the deal still opens (TurnController.preparing).
+    // Not while the deal still opens (nobody is to act meanwhile).
     final yours = controller.playerToMove;
     final legal = yours ? game.legalMoves() : const <DdzMove>[];
     final coach = controller.training && controller.coachVisible ? controller.coach : null;

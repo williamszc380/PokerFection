@@ -50,7 +50,8 @@ class GameMenuItem {
 /// and the hand.
 ///
 /// While the game prepares (TurnController.preparing: Blackjack's chart),
-/// the game's buttons and keys are greyed out and a thin bar runs.
+/// a thin bar runs over the coach. Nothing is greyed out for it: the
+/// game's buttons and keys work as usual.
 ///
 /// The coach list works the same in every game: a tap on a row selects its
 /// move, a double tap plays it, and Enter plays a choice selected that way
@@ -177,11 +178,9 @@ class GameScaffold extends StatelessWidget {
               const SingleActivator(LogicalKeyboardKey.enter): () => _again()
             else if (!shortcuts.keys.any(_isEnter) && controller.chosen != null)
               const SingleActivator(LogicalKeyboardKey.enter): () => controller.playChosen(),
-            // Nobody moves until the game is ready (the keys would throw).
-            if (!controller.preparing)
-              for (final MapEntry(key: key, value: action) in shortcuts.entries)
-                // Enter plays the choice lit from the coach list first.
-                key: _isEnter(key) ? () => controller.playChosen() || _run(action) : action,
+            for (final MapEntry(key: key, value: action) in shortcuts.entries)
+              // Enter plays the choice lit from the coach list first.
+              key: _isEnter(key) ? () => controller.playChosen() || _run(action) : action,
           },
           child: Focus(
             autofocus: true,
@@ -444,10 +443,7 @@ class _Panel extends StatelessWidget {
               ),
             ),
           )
-        : controller.preparing
-            // Greyed out, not hidden, until the game is ready.
-            ? IgnorePointer(child: ExcludeFocus(child: Opacity(opacity: 0.38, child: scaffold.panel)))
-            : scaffold.panel;
+        : scaffold.panel;
     // The compact panel has no room for Think longer under the moves.
     final thinkIcon = compact && showCoach
         ? ThinkLongerButton(
@@ -526,6 +522,7 @@ class _Panel extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // A notice only: the coach's work for this game is under way.
                   if (controller.preparing) const LinearProgressIndicator(minHeight: 2),
                   // Compact: as many moves as fit without scrolling, 3 to 5
                   // (5 in a board game's panel on a 592x360 phone; fewer with
@@ -606,7 +603,7 @@ class _Panel extends StatelessWidget {
       if (winners.length == 1) return k.wins(controller.seatName(winners.single));
       return k.youLose;
     }
-    final seat = controller.preparing ? null : controller.seatToAct;
+    final seat = controller.seatToAct;
     if (seat == null) return '';
     if (controller.isHuman(seat)) return k.yourTurn;
     return S.of(context).thinking(controller.seatName(seat));

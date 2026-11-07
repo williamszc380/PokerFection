@@ -25,11 +25,13 @@ class _SpotBroken implements Exception {
 /// Plays the mistake drills (see [Drills]). Each saved spot that is due,
 /// most overdue first, is dealt again exactly (the same table, cards and
 /// board) and its moves are replayed, the user's own too, up to the
-/// decision it was saved at; GTO's answer is worked out again on the way.
-/// That decision is graded like simple training (Show GTO waits until it is
+/// decision it was saved at; GTO's answer is worked out again on the way
+/// (behind the table, as in training: the hand doesn't wait for it). That
+/// decision is graded like simple training (Show GTO waits until it is
 /// played, so it can't give the answer away): played right (Good or
 /// better), the spot comes back later and later; wrong, in 10 minutes (see
-/// [outcome]). Then the next one.
+/// [outcome]). Played before its answer comes, it is graded when it does
+/// ([gradePending] meanwhile; Next Hand works at once). Then the next one.
 ///
 /// With nothing due, it deals random hands of simple training instead (a
 /// random table size, position and stack, against GTO), whose mistakes
@@ -46,6 +48,14 @@ class DrillController extends TableController {
 
   /// The spot was played: when it comes back.
   DrillOutcome? outcome;
+
+  /// The spot was played before its answer came: its grade is on its way
+  /// (the next hand can be dealt meanwhile).
+  bool gradePending = false;
+
+  /// The saved spot played before its answer came, and its hand: reviewed
+  /// when the grade lands, on screen or not.
+  ({DrillSpot spot, int hand})? _awaiting;
 
   /// The spot's recorded moves, and how many were replayed.
   List<DrillMove> _moves = const [];
@@ -65,13 +75,15 @@ class DrillController extends TableController {
   @override
   Future<void> startNextHand() async {
     if (_busy) return;
-    final next = drills.due.firstOrNull;
+    // A spot whose grade is still on its way isn't dealt again meanwhile.
+    final next = drills.due.where((s) => !identical(s, _awaiting?.spot)).firstOrNull;
     final table = next != null ? _tableOf(next) : (_nextTable ?? _randomTable());
     // The random table picked ahead waits for the next random hand.
     if (next == null) _nextTable = null;
     _precomputed = false;
     spot = next;
     outcome = null;
+    gradePending = false;
     _moves = next?.moves ?? const [];
     _replayed = 0;
     _seat(table);
@@ -89,10 +101,12 @@ class DrillController extends TableController {
       drills.remove(next);
       return startNextHand();
     }
-    // At the saved decision: the next hand is solved meanwhile.
-    _precomputeNext();
+    // At the saved decision, its answer in: the next hand is solved
+    // meanwhile (with the answer still to come, once it is: see
+    // _answerCame).
+    if (!answerPending) _precomputeNext();
     // No GTO answer this time: it isn't graded.
-    if (heroSpot == null) _finish(right: null);
+    if (heroSpot == null && !answerPending) _finish(right: null);
   }
 
   /// Sits the table for the next hand (Show All Cards stays as it was).
@@ -173,15 +187,58 @@ class DrillController extends TableController {
   }
 
   /// A saved spot: the play is graded (as in simple training) and the
-  /// hand stops there. Random hands go on as usual.
+  /// hand stops there; before its answer comes, it is graded when it does.
+  /// Random hands go on as usual.
   @override
   Future<void> playGraded(int choice, {PlayerAction? action}) async {
-    final answer = heroSpot;
+    final answer = heroSpot, spot = this.spot, d = _decision, menu = heroMenu;
     if (spot == null) return super.playGraded(choice, action: action);
-    if (answer == null || heroScore != null) return;
+    if (heroScore != null || gradePending || outcome != null) return;
+    if (answer == null) {
+      if (!answerPending || d == null || menu == null) return;
+      _unscored.add((
+        hand: d.hand,
+        turnId: d.turnId,
+        players: d.players,
+        styles: d.styles,
+        mix: [for (var i = 0; i < menu.length; i++) i == choice ? 1.0 : 0.0],
+        choice: choice,
+        drew: false,
+        action: action,
+        oneAction: true,
+      ));
+      _awaiting = (spot: spot, hand: d.hand);
+      // The hand stays stopped at the decision, as once graded.
+      heroOptions = null;
+      heroMenu = null;
+      gradePending = true;
+      _notify();
+      return;
+    }
     submitMix([for (var i = 0; i < answer.actions.length; i++) i == choice ? 1.0 : 0.0],
         choice: choice, oneAction: true);
     heroAction = action;
+  }
+
+  /// At a saved spot, an answer that comes with no spot leaves it ungraded,
+  /// as when there was none from the start. Either way the next hand's
+  /// solves can start.
+  @override
+  void _answerCame(_Decision d, GtoAnswer a, PokerHand? at, {PostflopTracker? postflop}) {
+    final showing = _showing(d);
+    super._answerCame(d, a, at, postflop: postflop);
+    if (spot == null || _disposed) return;
+    if (a.spot == null) {
+      if (showing && outcome == null) {
+        _finish(right: null);
+      } else if (_awaiting case final waited? when waited.hand == d.hand) {
+        _awaiting = null;
+        // Why, for the result area (the choices are gone already).
+        if (waited.hand == _tableHand) answerNone = a.none;
+        _review(waited.spot, waited.hand, right: null);
+      }
+    }
+    if (d.hand == _tableHand) _precomputeNext();
   }
 
   /// A saved spot is graded, nothing else (see [playGraded]).
@@ -190,16 +247,36 @@ class DrillController extends TableController {
     if (spot == null) await super.heroAct(action);
   }
 
-  /// A saved spot played: whether it was right decides when it comes back.
+  /// A saved spot played: whether it was right decides when it comes back
+  /// (graded after its move, from the copy of the hand at its decision).
   /// In a random hand, a mistake is saved as usual.
   @override
-  void _scored(DecisionScore score) {
-    if (spot == null) return super._scored(score);
-    _finish(right: score.grade.index <= DecisionGrade.good.index);
+  void _scoredAt(DecisionScore score, PokerHand at, List<PlayerInfo> players, List<BotStyle?> styles) {
+    final right = score.grade.index <= DecisionGrade.good.index;
+    if (_awaiting case final waited? when waited.hand == at.handNumber) {
+      _awaiting = null;
+      return _review(waited.spot, waited.hand, right: right);
+    }
+    if (spot == null) return super._scoredAt(score, at, players, styles);
+    _finish(right: right);
+  }
+
+  /// A saved spot is graded on screen, whatever the grade: when it is back
+  /// shows with it.
+  @override
+  bool _showsLate(DecisionScore score, _Unscored played) =>
+      (spot != null && played.hand == _tableHand) || super._showsLate(score, played);
+
+  /// The grade of [saved] (played in hand [hand]) came: shown with its
+  /// outcome if the spot is still on screen, else only recorded.
+  void _review(DrillSpot saved, int hand, {required bool? right}) {
+    if (identical(spot, saved) && hand == _tableHand) return _finish(right: right);
+    drills.review(saved, right: right);
   }
 
   void _finish({required bool? right}) {
     outcome = (wait: drills.review(spot!, right: right), right: right);
+    gradePending = false;
     _notify();
   }
 
@@ -207,7 +284,7 @@ class DrillController extends TableController {
   @override
   Future<void> continueHand() async {
     if (spot == null) return super.continueHand();
-    if (outcome != null) await startNextHand();
+    if (outcome != null || gradePending) await startNextHand();
   }
 
   /// Solves the next hand's whole preflop game meanwhile: the next spot
@@ -216,7 +293,7 @@ class DrillController extends TableController {
   void _precomputeNext() {
     if (_precomputed) return;
     _precomputed = true;
-    final table = switch ([for (final s in drills.due) if (s != spot) s].firstOrNull) {
+    final table = switch ([for (final s in drills.due) if (s != spot && !identical(s, _awaiting?.spot)) s].firstOrNull) {
       final next? => _tableOf(next),
       null => _nextTable ??= _randomTable(),
     };
@@ -229,7 +306,8 @@ class DrillController extends TableController {
       raiseRule: table.raiseRule,
     );
     // Failures show up when the hand needs the solve; nothing to do here.
-    unawaited(_solutions.solve(spec).then((_) {}, onError: (_) {}));
+    final owner = _nextOwner = SolveOwner(session.handNumber + 1);
+    _quietly(_solutions.solve(spec, owner: owner, priority: SolvePriority.nextHand));
   }
 
   /// No pre-actions while a saved spot replays: its moves are set.

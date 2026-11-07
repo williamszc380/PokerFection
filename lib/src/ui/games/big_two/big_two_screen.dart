@@ -133,7 +133,7 @@ class _BigTwoScreenState extends State<BigTwoScreen> {
                     state: c.state,
                     names: BigTwoTable.seatNames(context, c.record.seats),
                     strings: strings,
-                    toAct: c.preparing ? null : c.seatToAct,
+                    toAct: c.seatToAct,
                     seed: c.record.seed,
                     handsUp: c.showOpponentCards,
                     points: c.match != null && c.isOver ? bigTwoDealPoints(c.rules, c.state.result) : null,

@@ -267,9 +267,14 @@ class StringsEs extends S {
   @override
   String randomized(String action) => 'RNG: $action';
   @override
-  String solvingTable(int percent) => 'Resolviendo… $percent%';
-  @override
   String get solvingDecision => 'Resolviendo…';
+  @override
+  String lateGrade(DecisionGrade grade, Street street) => switch (street) {
+        Street.preflop => '${this.grade(grade)} preflop',
+        Street.flop => '${this.grade(grade)} en el flop',
+        Street.turn => '${this.grade(grade)} en el turn',
+        Street.river => '${this.grade(grade)} en el river',
+      };
   @override
   String thinking(String name) => '$name…';
   @override
@@ -281,7 +286,7 @@ class StringsEs extends S {
         NoAnswer.multiway => 'Sin respuesta GTO: bote multijugador',
         NoAnswer.leftSolvedLines => 'Sin respuesta GTO: fuera de las líneas resueltas',
         NoAnswer.solveFailed => 'Sin respuesta GTO: falló el solver',
-        null => 'Sin respuesta GTO',
+        NoAnswer.notNeeded || null => 'Sin respuesta GTO',
       };
   @override
   String mistakeReason(MistakeKind kind, SpotActionKind gto, String amount) {
@@ -804,6 +809,7 @@ class StringsEs extends S {
         GlossaryTerm.mixMatch => 'Coincidencia',
         GlossaryTerm.score => 'Puntuación',
         GlossaryTerm.grades => 'Calificaciones',
+        GlossaryTerm.solving => 'Resolviendo…',
         GlossaryTerm.noLimit => 'No-Limit',
         GlossaryTerm.minBet => 'Apuesta mínima',
         GlossaryTerm.minRaise => 'Subida mínima',
@@ -925,6 +931,8 @@ class StringsEs extends S {
             'borde blanco marca las manos en Avanzado.',
         GlossaryTerm.grades => 'Según la pérdida de EV (los tamaños de subida cuentan un 10%): Óptimo (hasta 0,02 BB), Bueno (0,08), Imprecisión (0,25), '
             'Error (0,75), Error grave (más).',
+        GlossaryTerm.solving => 'La respuesta GTO de esta decisión aún se está calculando. Sigue jugando: tu jugada '
+            'se califica cuando la respuesta esté lista, y Ver GTO la muestra en cuanto llega.',
         GlossaryTerm.noLimit => 'Las apuestas que se usan aquí: puedes apostar o subir cualquier cantidad, hasta '
             'todas tus fichas.',
         GlossaryTerm.minBet => 'La apuesta más pequeña permitida: una ciega grande.',

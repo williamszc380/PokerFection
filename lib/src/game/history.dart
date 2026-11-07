@@ -15,8 +15,10 @@ class DecisionRecord {
     this.turnId,
   });
 
-  /// Online: the server's turn this decision was made at, to correct
-  /// [played] if the server played something else (the time ran out).
+  /// Which decision of the hand this was: online, the server's turn (to
+  /// correct [played] if the server played something else, when the time
+  /// ran out); on the device, how many actions came before it. Decisions
+  /// are kept in this order (see [HandRecord.addDecision]).
   final int? turnId;
 
   /// One action played (simple training) rather than a mix: scored by
@@ -79,4 +81,17 @@ class HandRecord {
 
   double get evLost => decisions.fold(0.0, (sum, d) => sum + d.score.evLoss);
 
+  /// Adds [decision] in the order the hand played its decisions (by
+  /// [DecisionRecord.turnId]; one without goes last): a decision graded
+  /// after its move may come after a later one graded at once.
+  void addDecision(DecisionRecord decision) {
+    final turn = decision.turnId;
+    var at = decisions.length;
+    if (turn != null) {
+      while (at > 0 && (decisions[at - 1].turnId ?? turn + 1) > turn) {
+        at--;
+      }
+    }
+    decisions.insert(at, decision);
+  }
 }

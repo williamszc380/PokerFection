@@ -459,33 +459,39 @@ void main() {
     },
   );
 
-  test("the host watching with a GTO bot: the deal waits for the host's Ready (its device solves first), 10 s at "
-      'most; without one, it does not', () async {
-    for (final gto in [true, false]) {
+  test("nobody's solve holds up the deal: with a GTO bot or help on, the host watching never says Ready, and "
+      "each hand is dealt once the players are, at most OnlineTiming.readyWait after the earliest", () async {
+    for (final (bots, help) in [
+      ({0: 'gto', 1: 'tag'}, HelpLevel.none),
+      ({0: 'nit', 1: 'tag'}, HelpLevel.simple),
+      ({0: 'gto', 1: 'gto'}, HelpLevel.advanced),
+    ]) {
+      final what = '$bots, ${help.name}';
       final h = _Harness();
-      final host = await h.create(bots: {0: gto ? 'gto' : 'nit', 1: 'tag'}, seated: false)
+      final host = await h.create(
+        settings: RoomSettings(seats: 3, stackBb: 20, resetStacks: true, help: help),
+        bots: bots,
+        seated: false,
+      )..autoReady = false;
+      final ben = await h.join('Ben', host, seated: true)
         ..autoReady = false;
-      final ben = await h.join('Ben', host, seated: true);
       host.send(const StartGame());
       await h.settle();
       final first = host.all<NextHand>().first;
-      expect(first.you, isNull);
-      expect(ben.dealtAs, gto ? isEmpty : isNotEmpty, reason: 'Ben is ready (gto: $gto)');
-      if (!gto) continue;
-      h.clock.advance(const Duration(seconds: 9));
+      expect(first.you, isNull, reason: what);
+      expect(first.maxWaitMs - first.minWaitMs, OnlineTiming.readyWait.inMilliseconds, reason: what);
+      expect(ben.dealtAs, isEmpty, reason: 'Ben has not shown the last hand yet ($what)');
+      ben.send(Ready(first.hand));
       await h.settle();
-      expect(ben.dealtAs, isEmpty, reason: "the host hasn't solved yet");
-      host.send(Ready(first.hand));
-      await h.settle();
-      expect(ben.dealtAs.keys, [first.hand]);
+      expect(ben.dealtAs.keys, [first.hand], reason: "dealt once Ben is Ready: the host's device isn't waited for ($what)");
 
-      // The host never says Ready: dealt at the latest, 10 s after the earliest.
+      // The next hand: Ben's device never says Ready (an older app, still solving): dealt at the latest anyway.
       await h.until(() => host.all<NextHand>().length >= 2, 'the next hand announced');
       final next = host.all<NextHand>().last;
       final announcedAt = h.clock.nowMs;
-      expect(next.maxWaitMs - next.minWaitMs, OnlineTiming.readyWaitWithHelp.inMilliseconds);
+      expect(next.maxWaitMs - next.minWaitMs, OnlineTiming.readyWait.inMilliseconds, reason: what);
       await h.until(() => ben.dealtAs.containsKey(next.hand), 'dealt anyway');
-      expect(h.clock.nowMs - announcedAt, next.maxWaitMs);
+      expect(h.clock.nowMs - announcedAt, next.maxWaitMs, reason: what);
     }
   });
 

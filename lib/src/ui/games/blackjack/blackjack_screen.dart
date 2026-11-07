@@ -175,7 +175,7 @@ class _BlackjackScreenState extends State<BlackjackScreen> {
 
   /// Plays [action] if it is allowed now (a key for a greyed button does nothing).
   static void _play(BlackjackController controller, BlackjackAction action) {
-    if (!controller.started || controller.preparing || controller.isOver || controller.dealing.busy) return;
+    if (!controller.started || controller.isOver || controller.dealing.busy) return;
     final hand = controller.play.handToPlay;
     if (hand == null) return;
     final move = handMove(hand, action);
@@ -184,7 +184,7 @@ class _BlackjackScreenState extends State<BlackjackScreen> {
 
   /// Enter and Space: the next round, or a new shoe once this one is over.
   static void _next(BlackjackController controller) {
-    if (!controller.started || controller.preparing || controller.dealing.busy) return;
+    if (!controller.started || controller.dealing.busy) return;
     if (controller.isOver) {
       unawaited(controller.newGame());
     } else if (controller.betweenRounds) {

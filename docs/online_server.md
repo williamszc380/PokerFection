@@ -124,6 +124,14 @@ During the game:
   worked out on your own device, from the next hand; "—" when that
   player's cards are hidden from you (a bot's, unless the host lets
   spectators see them).
+- **Nobody waits for the solver.** The next hand is dealt as soon as
+  every player's app has shown the last one (3 s more at most). With help
+  on, your choices work at once; GTO's answer joins them when your own
+  device has worked it out (**Solving…** meanwhile), and a move made before
+  it is scored when it comes. **Show GTO** works meanwhile too: the answer
+  shows as soon as it is ready, and nothing waits for it. The host's bots
+  wait at most a second for their solve after thinking, then play a
+  simpler move that keeps everyone's help working.
 - **☰ > Chat** has the room's chat; the Room tab shows how many new
   messages came while you were on the Game tab.
 - While others act, everyone's buttons become **pre-actions**: tick
@@ -425,7 +433,8 @@ Android phones and tablets, iPhones and iPads can host too, the same way:
 - Phones don't serve the browser version: browser friends use the
   website's **Play in this browser** from the invite.
 - A phone hosting 8 players with GTO help solves a lot: help may come a
-  little late. A PC is the better host for big tables.
+  little late, and GTO bots play simpler moves more often. A PC is the
+  better host for big tables.
 
 ## 6. If something goes wrong
 

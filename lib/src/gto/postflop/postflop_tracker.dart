@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -40,6 +41,7 @@ class PostflopTracker {
     required this.bigBlind,
     this.raiseRule = RaiseRule.standard,
     this.heroSeat = -1,
+    this.needed,
   });
 
   final PreflopTracker preflop;
@@ -49,6 +51,12 @@ class PostflopTracker {
 
   /// The user's seat (-1 if no user plays): they get every raise size.
   final int heroSeat;
+
+  /// Whether anyone needs the answers on the street [hand] has just begun
+  /// (the user still in it to be graded, a GTO bot, a spectator's coach).
+  /// When it says no, nothing more is solved in this hand ([unavailable] is
+  /// [NoAnswer.notNeeded]). Null: always needed.
+  final bool Function(PokerHand hand)? needed;
 
   /// Seats of the two players the solve plays: first to act after the flop,
   /// then last. [field] stands for all the opponents at once.
@@ -87,7 +95,8 @@ class PostflopTracker {
     if (pending != null && unavailable == null) await pending;
   }
 
-  /// Call after every action: when a new street begins, starts solving it.
+  /// Call after every action: when a new street begins, starts solving it,
+  /// if anyone [needed] it.
   ///
   /// Await it before the hand moves on: after waiting for the street just
   /// played to be solved, it reads the hand as it is then (and a second
@@ -96,6 +105,18 @@ class PostflopTracker {
     if (unavailable != null || hand.street == Street.preflop || hand.street == _street) return;
     if (hand.isOver || hand.toAct == null) {
       _street = hand.street; // no more betting (someone is all-in): nothing to solve
+      return;
+    }
+    if (_street == null) {
+      // No answers before the flop (a subgame failed or was let go of): the
+      // ranges would start from a walk without it, so they'd be wrong.
+      if (preflop.unavailable case final none?) {
+        unavailable = none;
+        return;
+      }
+    }
+    if (needed?.call(hand) == false) {
+      unavailable = NoAnswer.notNeeded;
       return;
     }
     if (_street == null) {
@@ -166,11 +187,15 @@ class PostflopTracker {
       hero: _seats!.indexOf(heroSeat),
     );
     _solution = null;
-    _pending = solve(spec, [Float64List.fromList(_ranges![0]), Float64List.fromList(_ranges![1])])
+    final pending = _pending = solve(spec, [Float64List.fromList(_ranges![0]), Float64List.fromList(_ranges![1])])
         .then((solution) {
       if (identical(_spec, spec)) _solution = solution;
       return solution;
     });
+    // Nobody may ever wait for it: a hand let go of drops its streets not
+    // started yet (SolveCancelled), and a street can fail with no answer
+    // asked for. Whoever does wait ([ready], the next street) still hears.
+    pending.then((_) {}, onError: (Object _) {});
   }
 
   static Float64List _byCombo(Float64List classes) =>
@@ -210,12 +235,13 @@ class PostflopTracker {
   /// counts as them having checked to it. With [finish], the opponents'
   /// actions since the user's last move make the field's move too (when the
   /// street is over, or it is the user's turn). Null if the actions can't be
-  /// followed.
-  ({List<({PostflopDecision node, int action, List<int> seats})> steps, PostflopNode node})? _fieldPath(
-      PokerHand hand, Street street, PostflopSolution solution,
-      {required bool finish}) {
-    final user = _seats!.indexOf(heroSeat);
-    PostflopNode node = solution.tree.root;
+  /// followed. [root] is the street's tree, [seats] its two players and
+  /// [heroSeat] the user's seat.
+  static ({List<({PostflopDecision node, int action, List<int> seats})> steps, PostflopNode node})? _fieldPath(
+      PokerHand hand, Street street, PostflopNode root,
+      {required bool finish, required List<int> seats, required int heroSeat}) {
+    final user = seats.indexOf(heroSeat);
+    PostflopNode node = root;
     final steps = <({PostflopDecision node, int action, List<int> seats})>[];
     final pending = <ActionTaken>[];
     bool raised(ActionTaken e) => e.kind == ActionKind.bet || e.kind == ActionKind.raise;
@@ -270,7 +296,7 @@ class PostflopTracker {
     final solution = _solution;
     if (solution == null) return false;
     if (approximate) {
-      final path = _fieldPath(hand, street, solution, finish: true);
+      final path = _fieldPath(hand, street, solution.tree.root, finish: true, seats: _seats!, heroSeat: heroSeat);
       if (path == null) return false;
       final user = _seats!.indexOf(heroSeat);
       for (final step in path.steps) {
@@ -371,18 +397,25 @@ class PostflopTracker {
     if (approximate) {
       // Only the user's decisions, against the field.
       if (toAct != heroSeat) return null;
-      final node = _fieldPath(hand, hand.street, solution, finish: true)?.node;
+      final node =
+          _fieldPath(hand, hand.street, solution.tree.root, finish: true, seats: _seats!, heroSeat: heroSeat)?.node;
       return node is PostflopDecision && node.player == _seats!.indexOf(heroSeat) ? node : null;
     }
-    PostflopNode node = solution.tree.root;
+    return _headsUpNode(hand, solution.tree.root, _seats!);
+  }
+
+  /// Heads-up between [seats]: the decision of the player to act in [hand],
+  /// after this street's actions so far, in the street's tree [root].
+  static PostflopDecision? _headsUpNode(PokerHand hand, PostflopNode root, List<int> seats) {
+    PostflopNode node = root;
     for (final e in hand.log) {
       if (e is! ActionTaken || e.street != hand.street) continue;
-      if (node is! PostflopDecision || node.player != _seats!.indexOf(e.seat)) return null;
+      if (node is! PostflopDecision || node.player != seats.indexOf(e.seat)) return null;
       final i = matchAction(node, e);
       if (i < 0) return null;
       node = node.children[i];
     }
-    return node is PostflopDecision && node.player == _seats!.indexOf(toAct) ? node : null;
+    return node is PostflopDecision && node.player == seats.indexOf(hand.toAct!) ? node : null;
   }
 
   /// The GTO answer for the player to act, or null (not solved yet, not
@@ -473,7 +506,8 @@ class PostflopTracker {
       final range = Float64List.fromList(start);
       final solution = _solution;
       if (solution == null || hand.street != _street) return range;
-      for (final step in _fieldPath(hand, hand.street, solution, finish: false)?.steps ?? const []) {
+      final path = _fieldPath(hand, hand.street, solution.tree.root, finish: false, seats: seats, heroSeat: heroSeat);
+      for (final step in path?.steps ?? const []) {
         if (step.seats.contains(seat)) _narrowBy(range, solution, step.node, step.action, anySize: true);
       }
       return range;
@@ -496,13 +530,12 @@ class PostflopTracker {
   }
 
   /// Against the field: the decision an opponent's move would be the field's
-  /// move at (for snapping their bets to the solved sizes).
-  PostflopDecision? _fieldNode(PokerHand hand) {
-    final solution = _solution;
-    if (unavailable != null || solution == null || hand.street != _street) return null;
-    var node = _fieldPath(hand, hand.street, solution, finish: false)?.node;
+  /// move at (for snapping their bets to the solved sizes), in the street's
+  /// tree [root] played by [seats].
+  static PostflopDecision? _fieldNode(PokerHand hand, PostflopNode root, List<int> seats, int heroSeat) {
+    var node = _fieldPath(hand, hand.street, root, finish: false, seats: seats, heroSeat: heroSeat)?.node;
     if (node is! PostflopDecision) return null;
-    final fieldIndex = _seats!.indexOf(field);
+    final fieldIndex = seats.indexOf(field);
     if (node.player != fieldIndex) {
       // The user acts first in the heads-up game: as if they had checked.
       final check = node.actions.indexWhere((a) => a.move == PostflopMove.check);
@@ -512,12 +545,132 @@ class PostflopTracker {
     return node is PostflopDecision && node.player == fieldIndex ? node : null;
   }
 
+  /// The decision a bot to act in [hand] is at, in this street's betting:
+  /// in the solved street once it is solved, or else in the betting the
+  /// street's solve will have (its tree alone, with no solving: see
+  /// [_streetIn]), so a bot's move can keep to it before the solve is done.
+  PostflopDecision? _menuNode(PokerHand hand) {
+    if (unavailable != null || hand.street == Street.preflop || hand.isOver || hand.toAct == null) return null;
+    final solution = _solution;
+    if (solution != null && hand.street == _street) {
+      return approximate ? _fieldNode(hand, solution.tree.root, _seats!, heroSeat) : _decision(hand);
+    }
+    final ({List<int> seats, PostflopSpec spec})? street;
+    if (hand.street == _street) {
+      final spec = _spec, seats = _seats;
+      street = spec == null || seats == null ? null : (seats: seats, spec: spec);
+    } else {
+      street = _streetIn(hand, _seats, heroSeat: heroSeat, bigBlind: bigBlind, raiseRule: raiseRule);
+    }
+    return street == null ? null : _bettingNode(hand, street, heroSeat);
+  }
+
+  /// [hand]'s decision in the betting of [street] (no solve needed).
+  static PostflopDecision? _bettingNode(PokerHand hand, ({List<int> seats, PostflopSpec spec}) street, int heroSeat) {
+    final key = jsonEncode(street.spec.toJson());
+    var betting = _betting;
+    if (betting == null || betting.key != key) {
+      betting = _betting = (key: key, tree: PostflopTree(street.spec, hands: 1));
+    }
+    final root = betting.tree.root;
+    return street.seats.contains(field)
+        ? _fieldNode(hand, root, street.seats, heroSeat)
+        : _headsUpNode(hand, root, street.seats);
+  }
+
+  /// The betting tree of the street a bot last kept to (see [_bettingNode]):
+  /// the bots on a street ask for the same one.
+  static ({String key, PostflopTree tree})? _betting;
+
+  /// The street [hand] is on, as [update] will solve it once it begins it:
+  /// its two players ([seats], one of them maybe [field]) and its spec,
+  /// read from the hand (on the device, the hand follower is behind the
+  /// table). The stacks and pot are as they were when the street began, and
+  /// the players are the ones [update] picks, given [current], the players
+  /// of the street before (null before the flop). Null when it won't be
+  /// solved (more than two players and no user).
+  static ({List<int> seats, PostflopSpec spec})? _streetIn(PokerHand hand, List<int>? current,
+      {required int heroSeat, required int bigBlind, required RaiseRule raiseRule}) {
+    final n = hand.playerCount;
+    final actions = [for (final e in hand.log) if (e is ActionTaken) e];
+    final onStreet = [for (final e in actions) if (e.street == hand.street) e];
+    // Everyone still in when the street began, in the order they act on it.
+    final first = onStreet.isEmpty ? hand.toAct! : onStreet.first.seat;
+    final out = {for (final e in actions) if (e.kind == ActionKind.fold && e.street != hand.street) e.seat};
+    final live = [for (var k = 0; k < n; k++) if (!out.contains((first + k) % n)) (first + k) % n];
+    final List<int> seats;
+    if (current == null) {
+      if (live.length == 2) {
+        seats = live;
+      } else if (!live.contains(heroSeat)) {
+        return null;
+      } else {
+        seats = live.last == heroSeat ? [field, heroSeat] : [heroSeat, field];
+      }
+    } else if (current.contains(field)) {
+      final left = [for (final s in live) if (s != heroSeat) s];
+      if (left.isEmpty) return null;
+      if (left.length > 1) {
+        seats = current;
+      } else {
+        // One opponent left: heads-up against them, as _fieldForStreet does.
+        final opponent = left.single;
+        seats = live.indexOf(heroSeat) < live.indexOf(opponent) ? [heroSeat, opponent] : [opponent, heroSeat];
+      }
+    } else {
+      seats = current;
+    }
+    int startingStack(int seat) => hand.stackOf(seat) + hand.streetBetOf(seat);
+    int stackOf(int seat) => seat == field
+        ? [for (final s in live) if (s != heroSeat) startingStack(s)].reduce(max)
+        : startingStack(seat);
+    var bets = 0;
+    for (var seat = 0; seat < n; seat++) {
+      bets += hand.streetBetOf(seat);
+    }
+    return (
+      seats: seats,
+      spec: PostflopSpec(
+        board: [for (final c in hand.board) c.index],
+        pot: hand.potTotal - bets,
+        stacks: [stackOf(seats[0]), stackOf(seats[1])],
+        bigBlind: bigBlind,
+        raiseRule: raiseRule,
+        hero: seats.indexOf(heroSeat),
+      ),
+    );
+  }
+
   /// [action] with its bet size moved to the nearest size the solver has, so
-  /// bots with human styles keep the hand on the solved lines.
+  /// bots with human styles keep the hand on the solved lines. Before the
+  /// street is solved too: the sizes come from the betting its solve will
+  /// have (see [_menuNode]), so the hand never leaves the lines, and every
+  /// later decision can still be answered: a bot raising a raise goes
+  /// all-in (its only raise there), and where it has no raise at all it
+  /// calls or checks.
   PlayerAction snap(PokerHand hand, PlayerAction action) {
     if (action.type != ActionType.raise) return action;
-    final node = approximate ? _fieldNode(hand) : _decision(hand);
-    if (node == null) return action;
+    final node = _menuNode(hand);
+    return node == null ? action : _snapAt(node, hand, action);
+  }
+
+  /// [snap] for a hand no tracker follows yet (on the device, before its
+  /// whole game is solved; online, on the host, a hand its session hasn't
+  /// reached): the betting each street's solve will have, read from the
+  /// hand alone, as a tracker would solve it from the flop on.
+  static PlayerAction snapToBetting(PokerHand hand, PlayerAction action,
+      {required int heroSeat, required int bigBlind, RaiseRule raiseRule = RaiseRule.standard}) {
+    if (action.type != ActionType.raise || hand.street == Street.preflop || hand.isOver || hand.toAct == null) {
+      return action;
+    }
+    final street = _streetIn(hand, null, heroSeat: heroSeat, bigBlind: bigBlind, raiseRule: raiseRule);
+    final node = street == null ? null : _bettingNode(hand, street, heroSeat);
+    return node == null ? action : _snapAt(node, hand, action);
+  }
+
+  /// [action] at [node]: the nearest bet or raise it has (all-in included),
+  /// or a call or check when it has none.
+  static PlayerAction _snapAt(PostflopDecision node, PokerHand hand, PlayerAction action) {
     final legal = hand.legalActions();
     var best = action.amount;
     var distance = double.infinity;
@@ -530,6 +683,7 @@ class PostflopTracker {
         best = to;
       }
     }
+    if (distance == double.infinity) return legal.canCheck ? const PlayerAction.check() : const PlayerAction.call();
     return PlayerAction.raiseTo(best);
   }
 }

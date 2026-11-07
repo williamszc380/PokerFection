@@ -1,7 +1,9 @@
 // The blackjack controller: a shoe is a game, the strategy chart is made
-// once before the first turn, the coach answers every decision (never the
-// deal), moves are graded with the engine's lines, and the shoe is saved
-// after every move.
+// once alongside the first turns (none waits for it: the coach's jobs do),
+// the coach answers every decision (never the deal), moves are graded with
+// the engine's lines, and the shoe is saved after every move.
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pokerfection/src/app/last_games.dart';
@@ -48,7 +50,7 @@ void main() {
     final game = controllerFor(single, jobs: Jobs.inline(), lastGames: store);
     await game.newGame();
     await settle();
-    expect(game.chart, isNotNull, reason: 'the chart is made before the first turn');
+    expect(game.chart, isNotNull, reason: 'the chart is made alongside the first turn (inline jobs: at once)');
     expect(game.betweenRounds, isTrue);
     expect(game.coachWanted(playerSeat), isFalse, reason: 'no coach on the deal');
     await playOn(game);
@@ -119,31 +121,55 @@ void main() {
     game.dispose();
   });
 
-  test('nobody moves before the chart is made, and a new shoe with the same rules keeps it', () async {
+  test('Deal and the moves work while the chart is made; the coach waits for it, so every coach job carries the '
+      'chart, and a move made meanwhile is graded once its job answers', () async {
     final backend = ManualBackend({for (final job in blackjackJobs) job.name: job});
     final game = controllerFor(single, jobs: Jobs.using(backend));
-    final starting = game.newGame();
+    unawaited(game.newGame());
     await settle();
     expect(game.preparing, isTrue);
-    expect(backend.on(JobLane.coach)?.name, 'blackjack.chart');
-    expect(() => game.humanMove(dealMove), throwsStateError, reason: 'no turn before the chart');
-    backend.answer(backend.on(JobLane.coach)!);
-    await starting;
+    final chart = backend.on(JobLane.coach)!;
+    expect(chart.name, 'blackjack.chart');
+    expect(game.playerToMove, isTrue, reason: 'a new shoe deals at once');
+    // Deal until a decision, and make it: nothing waits for the chart.
+    int? decision;
+    for (var i = 0; i < 40 && decision == null; i++) {
+      if (game.betweenRounds) {
+        game.humanMove(dealMove);
+      } else {
+        expect(game.coachThinking, isTrue, reason: 'the coach job waits for the chart');
+        decision = game.record.moves.length;
+        game.humanMove(game.play.legalMoves().first);
+      }
+      await settle();
+    }
+    expect(decision, isNotNull, reason: 'a decision within 40 deals');
+    expect(game.record.moves, hasLength(decision! + 1));
+    expect(game.marks[decision], isNull, reason: 'not graded yet');
+    expect(
+      backend.started.where((job) => job.name == 'blackjack.coach'),
+      isEmpty,
+      reason: 'no coach job before the chart',
+    );
+    backend.answer(chart);
     await settle();
     expect(game.preparing, isFalse);
     expect(game.chart!.rules, single.rules);
+    for (var i = 0; i < 20 && backend.on(JobLane.coach) != null; i++) {
+      backend.answer(backend.on(JobLane.coach)!);
+      await settle();
+    }
+    final coachJobs = [for (final job in backend.started) if (job.name == 'blackjack.coach') job];
+    expect(coachJobs, isNotEmpty);
+    for (final job in coachJobs) {
+      expect(job.request, contains('"chart":'), reason: 'every coach job carries the chart');
+    }
+    expect(game.marks[decision], isNotNull, reason: 'graded once its job answered');
     expect(
       game.record.extra.keys,
       isNot(contains('chart')),
       reason: 'nothing kept beyond the game: the review makes its own',
     );
-    game.humanMove(dealMove);
-    await settle();
-    if (!game.betweenRounds) {
-      final coach = backend.on(JobLane.coach)!;
-      expect(coach.name, 'blackjack.coach');
-      expect(coach.request, contains('"chart":'), reason: 'every coach job carries the chart');
-    }
     final before = backend.started.where((j) => j.name == 'blackjack.chart').length;
     await game.newGame();
     await settle();
@@ -161,14 +187,24 @@ void main() {
     final game = controllerFor(single, jobs: Jobs.using(backend));
     final starting = game.newGame();
     await settle();
-    backend.fail(backend.on(JobLane.coach)!);
+    final chart = backend.on(JobLane.coach)!;
+    game.humanMove(dealMove);
+    expect(game.record.moves, [dealMove], reason: 'Deal works while the chart is made');
+    await settle();
+    backend.fail(chart);
     await starting;
     await settle();
     expect(reported.single.exception, isA<JobFailed>(), reason: 'the failure is reported, not hidden');
     expect(game.preparing, isFalse);
     expect(game.chart, isNull);
-    game.humanMove(dealMove);
-    expect(game.record.moves, [dealMove]);
+    // Deal until the coach is asked about a decision: it goes without the chart.
+    for (var i = 0; i < 40 && backend.on(JobLane.coach) == null; i++) {
+      game.humanMove(game.play.legalMoves().first);
+      await settle();
+    }
+    final coach = backend.on(JobLane.coach)!;
+    expect(coach.name, 'blackjack.coach');
+    expect(coach.request, isNot(contains('"chart":')), reason: 'the engine makes its own');
     game.dispose();
   });
 

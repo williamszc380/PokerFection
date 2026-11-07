@@ -101,6 +101,8 @@ void main() {
     for (var hand = 0; hand < 40 && drills.isEmpty; hand++) {
       await table.startNextHand();
       while (!table.handOver) {
+        // GTO's answer comes behind the table: wait for it, to play graded.
+        await table.caughtUp();
         final menu = table.heroMenu!;
         final fold = menu.indexWhere((a) => a.kind == SpotActionKind.fold && a.available);
         final choice = fold >= 0 ? fold : menu.indexWhere((a) => a.kind == SpotActionKind.check);
@@ -125,6 +127,7 @@ void main() {
     now = now.add(const Duration(minutes: 10));
     final drill = DrillController(drills, speed: PlaybackSpeed.instant, random: Random(4), solutions: _solutions());
     await drill.startNextHand();
+    await drill.caughtUp();
     expect(drill.spot, same(spot));
     final hand = drill.session.hand!;
     expect([for (var seat = 0; seat < hand.playerCount; seat++) hand.holeCards(seat)], spot.cards);

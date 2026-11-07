@@ -112,8 +112,9 @@ class LandlordChoice {
 ///
 /// Every deal opens with who bids first ([dealing], doudizhu_opening.dart):
 /// the cards go round the table and the face-up card flies to its holder,
-/// at the Animations setting's speed. The kit waits for it as for any
-/// [prepare]: nobody bids until it is over, the buttons greyed out.
+/// at the Animations setting's speed. It is an animation, not work: while
+/// it plays nobody is to act ([seatToAct] is null, the buttons greyed out),
+/// and when it ends the auction opens by itself (as Big Two's opening).
 class LandlordController extends TurnController {
   LandlordController({
     required super.jobs,
@@ -145,6 +146,10 @@ class LandlordController extends TurnController {
   LandlordDealing? get dealing => _clock?.now;
   LandlordDealClock? _clock;
 
+  /// The step that opens the deal is playing: nobody is to act until it
+  /// ends (then the auction opens by itself). Never at Instant.
+  bool get openingPlaying => _clock != null;
+
   /// The cards the player has picked (ids).
   Set<int> get selected => _selected;
   Set<int> _selected = const {};
@@ -170,7 +175,8 @@ class LandlordController extends TurnController {
   @override
   int? get seatToAct {
     final g = _game;
-    if (g == null) return null;
+    // Nobody acts while the deal opens.
+    if (g == null || openingPlaying) return null;
     return g.phase == DdzPhase.bidding || g.phase == DdzPhase.playing ? g.toAct : null;
   }
 
@@ -260,16 +266,17 @@ class LandlordController extends TurnController {
     _deals = previous == null ? 1 : _deals + 1;
     _selected = const {};
     _preview = null;
+    _startOpening();
     playSound(SoundEffect.deal);
     return record;
   }
 
   /// The deal's first step: who bids first, shown as the cards go round
-  /// (none at Instant). The auction waits for it.
-  @override
-  Future<void> prepare() async {
+  /// (none at Instant). Nobody is to act while it plays ([openingPlaying]);
+  /// when it ends the kit is told to go on, and the auction opens.
+  void _startOpening() {
     final start = game;
-    final clock = _clock = LandlordDealClock(
+    final clock = LandlordDealClock(
       start: start,
       order: DdzDealOrder.of(start),
       factor: speed.factor,
@@ -277,8 +284,16 @@ class LandlordController extends TurnController {
       onChange: notifyListeners,
       onFaceUp: (id) => _flyFaceUp(start.firstBidder, id),
     );
-    await clock.run();
-    if (identical(_clock, clock)) _clock = null;
+    unawaited(
+      clock.run().then((_) {
+        // A later deal, or the screen closed, cancelled this one.
+        if (!identical(_clock, clock)) return;
+        _clock = null;
+        resume();
+      }),
+    );
+    // At Instant the step is over as soon as it starts: nothing holds.
+    _clock = clock.running ? clock : null;
   }
 
   /// The face-up card leaves the stack face up for its holder's seat: the
@@ -473,7 +488,7 @@ class LandlordController extends TurnController {
   // ---- the player's selection ----
 
   /// Whether the player may pick cards now (their turn to play cards).
-  bool get canPlay => started && !preparing && seatToAct == you && game.phase == DdzPhase.playing;
+  bool get canPlay => started && seatToAct == you && game.phase == DdzPhase.playing;
 
   /// The play the selected cards make that may be played now, or null.
   Play? get selectedPlay {

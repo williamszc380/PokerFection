@@ -3,8 +3,8 @@ import 'dart:typed_data';
 /// The last few solves, by everything that goes into them (the spot and
 /// the players' ranges), so the same spot again is answered at once: a
 /// replayed or drilled hand, or the same situation coming up at the table.
-/// A solve still running is shared too. The least recently used are
-/// dropped first.
+/// A solve still running (or waiting its turn) is shared too. The least
+/// recently used are dropped first.
 class SolveCache<T> {
   SolveCache(this.keep);
 
@@ -14,16 +14,23 @@ class SolveCache<T> {
 
   int get length => _solves.length;
 
-  /// The solve for [key], starting it with [solve] if it isn't kept.
-  Future<T> get(SolveKey key, Future<T> Function() solve) {
-    final kept = _solves.remove(key);
-    if (kept != null) {
-      _solves[key] = kept; // now the most recently used
-      return kept;
+  /// Whether a solve for [key] is kept (done, running or waiting).
+  bool contains(SolveKey key) => _solves.containsKey(key);
+
+  /// The solve for [key], starting it with [solve] if it isn't kept. When it
+  /// is, [kept] is called first: the caller's chance to say it wants it too
+  /// (a waiting solve can become more urgent: see the solve queue's join).
+  Future<T> get(SolveKey key, Future<T> Function() solve, {void Function()? kept}) {
+    final found = _solves.remove(key);
+    if (found != null) {
+      _solves[key] = found; // now the most recently used
+      kept?.call();
+      return found;
     }
     final future = solve();
     _solves[key] = future;
-    // A failed solve isn't kept.
+    // A failed solve isn't kept (nor one dropped from the queue, which fails
+    // with SolveCancelled).
     future.then((_) {}, onError: (Object _) {
       if (identical(_solves[key], future)) _solves.remove(key);
     });
@@ -32,6 +39,10 @@ class SolveCache<T> {
     }
     return future;
   }
+
+  /// Forgets the solve for [key] now, rather than when its error arrives:
+  /// for a solve taken off the queue, so the next request starts it again.
+  void forget(SolveKey key) => _solves.remove(key);
 }
 
 /// What a solve depends on: the spot (as text) and the ranges, copied so

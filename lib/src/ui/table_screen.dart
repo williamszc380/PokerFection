@@ -303,19 +303,22 @@ class _TableScreenState extends State<TableScreen> {
     if (ranges) _openRange(context, seat);
   }
 
-  /// With a strategy to enter (or online, one on its way), the buttons in
-  /// the panel decide instead of the keys.
-  bool get _keysPlay => _controller.heroSpot == null && !(_online?.helpPending ?? false);
+  /// Without GTO's answer to grade against (Free Play, or no answer here),
+  /// the keys play at once; with one, here or on its way, the panel plays
+  /// them, graded as its buttons are (see DecisionPanelState.playKey).
+  bool get _keysPlay => _controller.heroSpot == null && !_controller.answerPending;
 
   void _foldOrCheck() {
     final options = _controller.heroOptions;
-    if (options == null || !_keysPlay) return;
+    if (options == null) return;
+    if (!_keysPlay) return _panel.currentState?.playKey(fold: true);
     _controller.heroAct(options.canCheck ? const PlayerAction.check() : const PlayerAction.fold());
   }
 
   void _checkOrCall() {
     final options = _controller.heroOptions;
-    if (options == null || !_keysPlay) return;
+    if (options == null) return;
+    if (!_keysPlay) return _panel.currentState?.playKey(fold: false);
     _controller.heroAct(options.canCheck ? const PlayerAction.check() : const PlayerAction.call());
   }
 
@@ -646,24 +649,18 @@ class _TableScreenState extends State<TableScreen> {
     Navigator.of(context).pop();
   }
 
-  /// Enter: deals the next hand, continues after a score, or plays the
-  /// choice made in the panel.
+  /// Enter: plays the choice made in the panel, continues after a score
+  /// (or puts it away), or deals the next hand (online, the server does).
   void _nextHand() {
-    // Online the table doesn't wait: choosing first, then OK on a score.
-    if (_online != null) {
-      if (_controller.heroOptions != null && _controller.heroScore == null) {
-        _panel.currentState?.submit();
-      } else if (_controller.heroScore != null) {
-        _controller.continueHand();
-      }
-      return;
-    }
-    if (_controller.handOver) {
-      _controller.startNextHand();
-    } else if (_controller.heroScore != null || _drill?.outcome != null) {
-      _controller.continueHand();
-    } else if (_controller.heroMenu != null) {
+    final c = _controller, drill = _drill;
+    if (c.heroScore != null) {
+      c.continueHand();
+    } else if (drill != null && (drill.outcome != null || drill.gradePending)) {
+      c.continueHand();
+    } else if (c.heroOptions != null && c.heroMenu != null) {
       _panel.currentState?.submit();
+    } else if (c.handOver) {
+      c.startNextHand();
     }
   }
 
